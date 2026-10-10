@@ -1,0 +1,21 @@
+# Python bytecode and cache directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local virtual environment
+.venv/
+venv/
+env/
+
+# Local environment and secret files
+.env
+.env.*
+!.env.example
+
+# Common test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/

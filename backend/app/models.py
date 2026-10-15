@@ -1,8 +1,4 @@
-"""Data models used by the first rule-based backend version.
-
-These models use only Python's standard library so the scoring logic can be
-tested before FastAPI, a database, or computer-vision packages are added.
-"""
+"""Shared data models for construction-site hazard assessment."""
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,21 +7,15 @@ from typing import Optional, Tuple
 
 @dataclass(frozen=True)
 class NormalizedObservation:
-    """A consistent representation of one monitoring observation.
-
-    ``labels`` are normalized labels supplied by a future data loader. For
-    now, tests use synthetic labels and do not represent real site records.
-    ``detection_confidence`` describes model certainty only; it is not the
-    accident likelihood used by the project-defined risk formula.
-    """
+    """A consistent representation of one site observation."""
 
     observation_id: str
     timestamp: datetime
     source: str
     labels: Tuple[str, ...] = field(default_factory=tuple)
-    people_count: int = 1
-    duration_minutes: int = 1
-    repeated_count: int = 0
+    people_count: Optional[int] = None
+    duration_minutes: Optional[int] = None
+    repeated_count: Optional[int] = None
     work_area: str = "unspecified"
     detection_confidence: Optional[float] = None
 
@@ -36,14 +26,27 @@ class NormalizedObservation:
             raise ValueError("source must not be empty")
         if not self.labels:
             raise ValueError("at least one observation label is required")
-        if self.people_count < 1:
-            raise ValueError("people_count must be at least 1")
-        if self.duration_minutes < 1:
-            raise ValueError("duration_minutes must be at least 1")
-        if self.repeated_count < 0:
+        if self.people_count is not None and self.people_count < 1:
+            raise ValueError("people_count must be at least 1 when provided")
+        if self.duration_minutes is not None and self.duration_minutes < 1:
+            raise ValueError("duration_minutes must be at least 1 when provided")
+        if self.repeated_count is not None and self.repeated_count < 0:
             raise ValueError("repeated_count cannot be negative")
-        if self.detection_confidence is not None and not 0 <= self.detection_confidence <= 1:
+        if (
+            self.detection_confidence is not None
+            and not 0 <= self.detection_confidence <= 1
+        ):
             raise ValueError("detection_confidence must be between 0 and 1")
+
+
+@dataclass(frozen=True)
+class DetectedHazard:
+    """A detected hazard, which can exist before risk scoring."""
+
+    observation_id: str
+    hazard_type: str
+    source_label: str
+    detection_confidence: Optional[float] = None
 
 
 @dataclass(frozen=True)

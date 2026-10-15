@@ -58,6 +58,38 @@ class SiteRiskAgentTests(unittest.TestCase):
         self.assertEqual(result.detection_confidence, 0.91)
         self.assertIn("score=40", result.explanation)
 
+    def test_detects_hazard_when_people_count_is_missing(self) -> None:
+        observation = NormalizedObservation(
+            observation_id="synthetic-003",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            source="synthetic_test_fixture",
+            labels=("no_helmet",),
+            duration_minutes=45,
+            repeated_count=3,
+        )
+
+        detected = self.agent.detect_hazards(observation)
+
+        self.assertEqual(len(detected), 1)
+        self.assertEqual(detected[0].hazard_type, "missing_safety_helmet")
+        self.assertIsNone(self.agent.assess_hazard(detected[0], observation))
+        self.assertEqual(self.agent.assess(observation), [])
+
+    def test_missing_duration_keeps_hazard_unscored(self) -> None:
+        observation = NormalizedObservation(
+            observation_id="synthetic-004",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            source="synthetic_test_fixture",
+            labels=("no_helmet",),
+            people_count=2,
+            repeated_count=3,
+        )
+
+        detected = self.agent.detect_hazards(observation)
+
+        self.assertEqual(len(detected), 1)
+        self.assertEqual(self.agent.assess(observation), [])
+
     def test_unknown_labels_are_not_guessed(self) -> None:
         observation = NormalizedObservation(
             observation_id="synthetic-002",
@@ -66,6 +98,7 @@ class SiteRiskAgentTests(unittest.TestCase):
             labels=("unknown_label",),
         )
 
+        self.assertEqual(self.agent.detect_hazards(observation), [])
         self.assertEqual(self.agent.assess(observation), [])
 
 

@@ -40,8 +40,27 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         result = response.json()
         self.assertEqual(result["observation_id"], "synthetic-api-001")
+        self.assertEqual(len(result["detected_hazards"]), 1)
+        self.assertEqual(result["pending_hazards"], [])
         self.assertEqual(result["assessments"][0]["risk_score"], 40)
         self.assertEqual(result["assessments"][0]["risk_band"], "High")
+
+    def test_detected_hazard_is_pending_when_scoring_inputs_are_missing(self) -> None:
+        response = self.client.post(
+            "/assessments",
+            json={
+                "observation_id": "synthetic-api-004",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "source": "synthetic_test_fixture",
+                "labels": ["no_helmet"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(len(result["detected_hazards"]), 1)
+        self.assertEqual(result["assessments"], [])
+        self.assertEqual(result["pending_hazards"], result["detected_hazards"])
 
     def test_unknown_labels_return_no_assessments(self) -> None:
         response = self.client.post(
@@ -55,6 +74,7 @@ class ApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["detected_hazards"], [])
         self.assertEqual(response.json()["assessments"], [])
 
     def test_invalid_observation_is_rejected(self) -> None:

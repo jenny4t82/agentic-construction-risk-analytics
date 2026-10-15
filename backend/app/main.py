@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from .models import NormalizedObservation
+from .models import DetectedHazard, NormalizedObservation
 from .risk_agent import SiteRiskAgent
 
 
@@ -17,9 +17,9 @@ class ObservationRequest(BaseModel):
     timestamp: datetime
     source: str = Field(min_length=1)
     labels: list[str] = Field(min_length=1)
-    people_count: int = Field(default=1, ge=1)
-    duration_minutes: int = Field(default=1, ge=1)
-    repeated_count: int = Field(default=0, ge=0)
+    people_count: Optional[int] = Field(default=None, ge=1)
+    duration_minutes: Optional[int] = Field(default=None, ge=1)
+    repeated_count: Optional[int] = Field(default=None, ge=0)
     work_area: str = "unspecified"
     detection_confidence: Optional[float] = Field(default=None, ge=0, le=1)
 
@@ -39,11 +39,22 @@ class AssessmentResponse(BaseModel):
     explanation: str
 
 
-class AssessmentsResponse(BaseModel):
-    """Response containing all supported hazards found in an observation."""
+class DetectedHazardResponse(BaseModel):
+    """JSON representation of a detected hazard, scored or pending."""
 
     observation_id: str
+    hazard_type: str
+    source_label: str
+    detection_confidence: Optional[float]
+
+
+class AssessmentsResponse(BaseModel):
+    """Response separating detected hazards from completed assessments."""
+
+    observation_id: str
+    detected_hazards: list[DetectedHazardResponse]
     assessments: list[AssessmentResponse]
+    pending_hazards: list[DetectedHazardResponse]
 
 
 app = FastAPI(
@@ -79,11 +90,27 @@ def create_assessments(request: ObservationRequest) -> AssessmentsResponse:
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
-    assessments = [
-        AssessmentResponse.model_validate(assessment, from_attributes=True)
-        for assessment in agent.assess(observation)
-    ]
+    detected_hazards = agent.detect_hazards(observation)
+    assessments = []
+    pending_hazards = []
+    for hazard in detected_hazards:
+        assessment = agent.assess_hazard(hazard, observation)
+        if assessment is None:
+            pending_hazards.append(
+                DetectedHazardResponse.model_validate(hazard, from_attributes=True)
+            )
+        else:
+            assessments.append(
+                AssessmentResponse.model_validate(
+                    assessment, from_attributes=True
+                )
+            )
     return AssessmentsResponse(
         observation_id=request.observation_id,
+        detected_hazards=[
+            DetectedHazardResponse.model_validate(hazard, from_attributes=True)
+            for hazard in detected_hazards
+        ],
         assessments=assessments,
+        pending_hazards=pending_hazards,
     )

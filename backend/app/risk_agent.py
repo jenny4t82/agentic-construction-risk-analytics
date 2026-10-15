@@ -5,9 +5,9 @@ claim to perform computer-vision inference. A future YOLO adapter can produce
 the labels consumed here.
 """
 
-from typing import Iterable, List
+from typing import List, Optional
 
-from .models import HazardAssessment, NormalizedObservation
+from .models import DetectedHazard, HazardAssessment, NormalizedObservation
 from .scoring import calculate_risk_score, risk_band
 
 
@@ -22,48 +22,69 @@ LABEL_TO_HAZARD = {
 class SiteRiskAgent:
     """Detect supported hazards and assign project-defined risk values."""
 
-    def detect_hazards(self, labels: Iterable[str]) -> List[tuple[str, str]]:
-        """Map source labels to application hazard names.
+    def detect_hazards(
+        self, observation: NormalizedObservation
+    ) -> List[DetectedHazard]:
+        """Record supported hazards without requiring scoring inputs.
 
         Unknown labels are ignored rather than guessed. This prevents the
         first version from inventing hazards that the rules do not support.
         """
 
         return [
-            (LABEL_TO_HAZARD[label], label)
-            for label in labels
+            DetectedHazard(
+                observation_id=observation.observation_id,
+                hazard_type=LABEL_TO_HAZARD[label],
+                source_label=label,
+                detection_confidence=observation.detection_confidence,
+            )
+            for label in observation.labels
             if label in LABEL_TO_HAZARD
         ]
 
+    def assess_hazard(
+        self, hazard: DetectedHazard, observation: NormalizedObservation
+    ) -> Optional[HazardAssessment]:
+        """Score one detected hazard when all required inputs are present."""
+
+        if (
+            observation.people_count is None
+            or observation.duration_minutes is None
+            or observation.repeated_count is None
+        ):
+            return None
+
+        severity = self._severity_for(hazard.hazard_type)
+        likelihood = self._likelihood_for(observation.repeated_count)
+        exposure = self._exposure_for(
+            observation.people_count, observation.duration_minutes
+        )
+        score = calculate_risk_score(severity, likelihood, exposure)
+        return HazardAssessment(
+            observation_id=hazard.observation_id,
+            hazard_type=hazard.hazard_type,
+            source_label=hazard.source_label,
+            severity=severity,
+            likelihood=likelihood,
+            exposure=exposure,
+            risk_score=score,
+            risk_band=risk_band(score),
+            detection_confidence=hazard.detection_confidence,
+            explanation=(
+                f"{hazard.source_label} was mapped to {hazard.hazard_type}. "
+                f"Severity={severity}, likelihood={likelihood}, "
+                f"and exposure={exposure}; score={score}."
+            ),
+        )
+
     def assess(self, observation: NormalizedObservation) -> List[HazardAssessment]:
-        """Return one explainable assessment for each supported hazard."""
+        """Return completed assessments for detected hazards only."""
 
         assessments: List[HazardAssessment] = []
-        for hazard_type, source_label in self.detect_hazards(observation.labels):
-            severity = self._severity_for(hazard_type)
-            likelihood = self._likelihood_for(observation.repeated_count)
-            exposure = self._exposure_for(
-                observation.people_count, observation.duration_minutes
-            )
-            score = calculate_risk_score(severity, likelihood, exposure)
-            assessments.append(
-                HazardAssessment(
-                    observation_id=observation.observation_id,
-                    hazard_type=hazard_type,
-                    source_label=source_label,
-                    severity=severity,
-                    likelihood=likelihood,
-                    exposure=exposure,
-                    risk_score=score,
-                    risk_band=risk_band(score),
-                    detection_confidence=observation.detection_confidence,
-                    explanation=(
-                        f"{source_label} was mapped to {hazard_type}. "
-                        f"Severity={severity}, likelihood={likelihood}, "
-                        f"and exposure={exposure}; score={score}."
-                    ),
-                )
-            )
+        for hazard in self.detect_hazards(observation):
+            assessment = self.assess_hazard(hazard, observation)
+            if assessment is not None:
+                assessments.append(assessment)
         return assessments
 
     @staticmethod

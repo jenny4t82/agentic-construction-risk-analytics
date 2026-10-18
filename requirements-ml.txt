@@ -1,0 +1,7 @@
+# Optional ML and Computer Vision dependencies for Milestone 1 training and local inference.
+# Not required for running standard unit tests, database migrations, or the mock detector.
+-r requirements.txt
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
+pillow>=10.0.0

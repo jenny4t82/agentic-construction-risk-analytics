@@ -16,7 +16,10 @@ LABEL_TO_HAZARD = {
     "no_gloves": "missing_safety_gloves",
     "no_boots": "missing_safety_boots",
     "no_goggle": "missing_safety_goggles",
+    "no_vest": "missing_safety_vest",
+    "no_mask": "missing_protective_mask",
 }
+
 
 
 class SiteRiskAgent:
@@ -90,11 +93,14 @@ class SiteRiskAgent:
     @staticmethod
     def _severity_for(hazard_type: str) -> int:
         # Project-defined consequence assumptions for PPE violations.
+        # These values are provisional educational heuristics, not regulatory or official safety standards.
         return {
             "missing_safety_helmet": 5,
             "missing_safety_gloves": 3,
             "missing_safety_boots": 3,
             "missing_safety_goggles": 4,
+            "missing_safety_vest": 4,
+            "missing_protective_mask": 2,
         }[hazard_type]
 
     @staticmethod

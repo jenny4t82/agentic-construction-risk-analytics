@@ -6,6 +6,7 @@ __pycache__/
 
 # Local virtual environment
 .venv/
+.venv-yolo/
 venv/
 env/
 
@@ -19,3 +20,25 @@ env/
 .mypy_cache/
 .coverage
 htmlcov/
+
+# Backup and temporary files
+*.backup
+
+# Datasets and raw archives
+datasets/
+*.zip
+*.tar
+*.tar.gz
+
+# Model weights and artifacts
+*.pt
+*.onnx
+*.weights
+*.bin
+*.safetensors
+weights/
+models/*.pt
+models/*.onnx
+
+# Training outputs and YOLO runs
+runs/

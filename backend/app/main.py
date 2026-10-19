@@ -1,15 +1,19 @@
 """FastAPI entry point for the Milestone 1 Site Risk Agent."""
 
 import email
+import logging
 import os
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
+from .database import get_db
 from .detector import (
     BaseHazardDetector,
     MockHazardDetector,
@@ -17,6 +21,11 @@ from .detector import (
     YOLOv8HazardDetector,
 )
 from .models import DetectedHazard, NormalizedObservation
+from .persistence import (
+    get_observation_record,
+    list_observation_records,
+    persist_observation_bundle,
+)
 from .risk_agent import SiteRiskAgent
 
 
@@ -67,11 +76,66 @@ class AssessmentsResponse(BaseModel):
     pending_hazards: list[DetectedHazardResponse]
 
 
+class PersistedAssessmentResponse(BaseModel):
+    """JSON representation of a persisted risk assessment."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    assessment_id: Optional[int] = None
+    assessment_version: int
+    status: str
+    severity: Optional[int] = None
+    likelihood: Optional[int] = None
+    exposure: Optional[int] = None
+    risk_score: Optional[int] = None
+    risk_band: Optional[str] = None
+    explanation: Optional[str] = None
+    missing_inputs: Optional[list[str]] = None
+    scoring_rule_version: str
+    assessed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+class PersistedHazardResponse(BaseModel):
+    """JSON representation of a persisted hazard detection with assessments."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    detected_hazard_id: Optional[int] = None
+    hazard_type: str
+    source_label: str
+    detection_confidence: Optional[float] = None
+    detected_at: Optional[datetime] = None
+    detector_name: Optional[str] = None
+    evidence: Optional[dict[str, Any]] = None
+    assessments: list[PersistedAssessmentResponse] = []
+
+
+class ObservationDetailResponse(BaseModel):
+    """JSON representation of a persisted site observation."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    observation_id: str
+    observed_at: datetime
+    source: str
+    work_area: Optional[str] = None
+    people_count: Optional[int] = None
+    duration_minutes: Optional[int] = None
+    repeated_count: Optional[int] = None
+    detection_confidence: Optional[float] = None
+    raw_metadata: Optional[dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    detected_hazards: list[PersistedHazardResponse] = []
+
+
 app = FastAPI(
     title="Agentic Construction Risk Intelligence Platform",
     version="0.1.0",
 )
 agent = SiteRiskAgent()
+logger = logging.getLogger(__name__)
 
 
 @app.get("/health")
@@ -82,7 +146,10 @@ def health() -> dict[str, str]:
 
 
 @app.post("/assessments", response_model=AssessmentsResponse)
-def create_assessments(request: ObservationRequest) -> AssessmentsResponse:
+def create_assessments(
+    request: ObservationRequest,
+    db: Optional[Session] = Depends(get_db),
+) -> AssessmentsResponse:
     """Assess the supported hazards in one normalized observation."""
 
     try:
@@ -115,6 +182,34 @@ def create_assessments(request: ObservationRequest) -> AssessmentsResponse:
                     assessment, from_attributes=True
                 )
             )
+
+    if db is not None:
+        try:
+            persist_observation_bundle(
+                session=db,
+                observation_id=request.observation_id,
+                timestamp=request.timestamp,
+                source=request.source,
+                work_area=request.work_area,
+                people_count=request.people_count,
+                duration_minutes=request.duration_minutes,
+                repeated_count=request.repeated_count,
+                detection_confidence=request.detection_confidence,
+                detected_hazards=detected_hazards,
+                assessments=assessments,
+            )
+        except ValueError as err:
+            raise HTTPException(status_code=409, detail=str(err)) from err
+        except SQLAlchemyError as err:
+            logger.error(
+                "Database persistence failed for observation %s: %s",
+                request.observation_id,
+                err,
+            )
+            raise HTTPException(
+                status_code=500, detail="Database persistence failed"
+            ) from err
+
     return AssessmentsResponse(
         observation_id=request.observation_id,
         detected_hazards=[
@@ -245,6 +340,7 @@ async def create_image_assessments(
     duration_minutes: Optional[int] = Query(default=None),
     repeated_count: Optional[int] = Query(default=None),
     detector: BaseHazardDetector = Depends(get_hazard_detector),
+    db: Optional[Session] = Depends(get_db),
 ) -> AssessmentsResponse:
     """Detect supported hazards in an uploaded image and produce risk assessments.
 
@@ -337,6 +433,34 @@ async def create_image_assessments(
         resolved_people_count = detection.people_count
 
     if not detection.hazard_labels:
+        if db is not None:
+            try:
+                persist_observation_bundle(
+                    session=db,
+                    observation_id=resolved_obs_id,
+                    timestamp=datetime.now(timezone.utc),
+                    source=f"image_upload:{request.headers.get('x-filename', 'site_image')}",
+                    work_area=resolved_work_area,
+                    people_count=resolved_people_count,
+                    duration_minutes=resolved_duration,
+                    repeated_count=resolved_repeated,
+                    detection_confidence=detection.max_confidence,
+                    detected_hazards=[],
+                    assessments=[],
+                    detector_name=type(detector).__name__,
+                )
+            except ValueError as err:
+                raise HTTPException(status_code=409, detail=str(err)) from err
+            except SQLAlchemyError as err:
+                logger.error(
+                    "Database persistence failed for image observation %s: %s",
+                    resolved_obs_id,
+                    err,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Database persistence failed"
+                ) from err
+
         return AssessmentsResponse(
             observation_id=resolved_obs_id,
             detected_hazards=[],
@@ -373,6 +497,34 @@ async def create_image_assessments(
                 AssessmentResponse.model_validate(assessment, from_attributes=True)
             )
 
+    if db is not None:
+        try:
+            persist_observation_bundle(
+                session=db,
+                observation_id=resolved_obs_id,
+                timestamp=observation.timestamp,
+                source=observation.source,
+                work_area=resolved_work_area,
+                people_count=resolved_people_count,
+                duration_minutes=resolved_duration,
+                repeated_count=resolved_repeated,
+                detection_confidence=detection.max_confidence,
+                detected_hazards=detected_hazards,
+                assessments=assessments,
+                detector_name=type(detector).__name__,
+            )
+        except ValueError as err:
+            raise HTTPException(status_code=409, detail=str(err)) from err
+        except SQLAlchemyError as err:
+            logger.error(
+                "Database persistence failed for image observation %s: %s",
+                resolved_obs_id,
+                err,
+            )
+            raise HTTPException(
+                status_code=500, detail="Database persistence failed"
+            ) from err
+
     return AssessmentsResponse(
         observation_id=resolved_obs_id,
         detected_hazards=[
@@ -382,3 +534,59 @@ async def create_image_assessments(
         assessments=assessments,
         pending_hazards=pending_hazards,
     )
+
+
+@app.get("/observations", response_model=list[ObservationDetailResponse])
+def get_observations(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Optional[Session] = Depends(get_db),
+) -> list[ObservationDetailResponse]:
+    """List recent site observations with detected hazards and assessments."""
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database persistence is not configured. Set DATABASE_URL to enable persistence.",
+        )
+    try:
+        records = list_observation_records(db, limit=limit, offset=offset)
+        return [
+            ObservationDetailResponse.model_validate(rec, from_attributes=True)
+            for rec in records
+        ]
+    except SQLAlchemyError as err:
+        logger.error("Failed to query observations from database: %s", err)
+        raise HTTPException(
+            status_code=500, detail="Failed to query observations from database"
+        ) from err
+
+
+@app.get("/observations/{observation_id}", response_model=ObservationDetailResponse)
+def get_observation(
+    observation_id: str,
+    db: Optional[Session] = Depends(get_db),
+) -> ObservationDetailResponse:
+    """Retrieve one saved observation with its detected hazards and assessments."""
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database persistence is not configured. Set DATABASE_URL to enable persistence.",
+        )
+    try:
+        record = get_observation_record(db, observation_id=observation_id)
+    except SQLAlchemyError as err:
+        logger.error(
+            "Failed to query observation %s from database: %s",
+            observation_id,
+            err,
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to query observation from database"
+        ) from err
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Observation '{observation_id}' not found",
+        )
+    return ObservationDetailResponse.model_validate(record, from_attributes=True)

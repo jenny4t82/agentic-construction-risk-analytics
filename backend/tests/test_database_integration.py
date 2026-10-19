@@ -58,6 +58,66 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
             }.issubset(table_names)
         )
 
+    def test_persist_and_retrieve_observation_bundle(self) -> None:
+        from datetime import datetime, timezone
+        from sqlalchemy.orm import sessionmaker
+        from app.models import DetectedHazard, HazardAssessment
+        from app.persistence import (
+            get_observation_record,
+            list_observation_records,
+            persist_observation_bundle,
+        )
+
+        SessionLocal = sessionmaker(bind=self.engine)
+        obs_id = "integration-obs-001"
+
+        with SessionLocal() as session:
+            with session.begin():
+                hazard = DetectedHazard(
+                    observation_id=obs_id,
+                    hazard_type="missing_safety_helmet",
+                    source_label="no_helmet",
+                    detection_confidence=0.95,
+                )
+                assessment = HazardAssessment(
+                    observation_id=obs_id,
+                    hazard_type="missing_safety_helmet",
+                    source_label="no_helmet",
+                    severity=5,
+                    likelihood=4,
+                    exposure=2,
+                    risk_score=40,
+                    risk_band="High",
+                    detection_confidence=0.95,
+                    explanation="integration test",
+                )
+                persist_observation_bundle(
+                    session=session,
+                    observation_id=obs_id,
+                    timestamp=datetime.now(timezone.utc),
+                    source="integration_test",
+                    work_area="Zone-A",
+                    people_count=2,
+                    duration_minutes=30,
+                    repeated_count=1,
+                    detection_confidence=0.95,
+                    detected_hazards=[hazard],
+                    assessments=[assessment],
+                )
+
+        with SessionLocal() as session:
+            fetched = get_observation_record(session, obs_id)
+            self.assertIsNotNone(fetched)
+            assert fetched is not None
+            self.assertEqual(fetched.observation_id, obs_id)
+            self.assertEqual(len(fetched.detected_hazards), 1)
+            self.assertEqual(fetched.detected_hazards[0].hazard_type, "missing_safety_helmet")
+            self.assertEqual(len(fetched.detected_hazards[0].assessments), 1)
+            self.assertEqual(fetched.detected_hazards[0].assessments[0].risk_score, 40)
+
+            all_records = list_observation_records(session, limit=10, offset=0)
+            self.assertTrue(any(r.observation_id == obs_id for r in all_records))
+
 
 if __name__ == "__main__":
     unittest.main()

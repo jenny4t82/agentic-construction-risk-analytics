@@ -6,7 +6,7 @@ live database or a DATABASE_URL environment variable.
 """
 
 import os
-from typing import Optional
+from typing import Generator, Optional
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,6 +14,78 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 DATABASE_URL_ENV = "DATABASE_URL"
+
+_cached_database_url: Optional[str] = None
+_cached_engine: Optional[Engine] = None
+_cached_session_factory: Optional[sessionmaker[Session]] = None
+
+
+def get_engine() -> Optional[Engine]:
+    """Return the cached Engine for the current DATABASE_URL, or None if unset."""
+    global _cached_database_url, _cached_engine, _cached_session_factory
+    url = os.getenv(DATABASE_URL_ENV)
+    if not url:
+        if _cached_engine is not None:
+            _cached_engine.dispose()
+        _cached_engine = None
+        _cached_database_url = None
+        _cached_session_factory = None
+        return None
+
+    if _cached_engine is not None and _cached_database_url == url:
+        return _cached_engine
+
+    if _cached_engine is not None:
+        _cached_engine.dispose()
+
+    _cached_engine = create_database_engine(url)
+    _cached_database_url = url
+    _cached_session_factory = None
+    return _cached_engine
+
+
+def get_session_factory() -> Optional[sessionmaker[Session]]:
+    """Return the session factory for the current engine, or None if unset."""
+    global _cached_session_factory
+    engine = get_engine()
+    if engine is None:
+        _cached_session_factory = None
+        return None
+    if (
+        _cached_session_factory is None
+        or _cached_session_factory.kw.get("bind") != engine
+    ):
+        _cached_session_factory = create_session_factory(engine)
+    return _cached_session_factory
+
+
+def get_db() -> Generator[Optional[Session], None, None]:
+    """FastAPI dependency yielding an active SQLAlchemy session when DATABASE_URL is configured.
+
+    If DATABASE_URL is not set, yields None so stateless operations and lightweight unit tests
+    run without requiring a database.
+    When a live session is yielded, commits on successful block execution, rolls back on
+    unhandled exceptions, and always closes the session cleanly.
+    """
+    url = os.getenv(DATABASE_URL_ENV)
+    if not url:
+        yield None
+        return
+
+    factory = get_session_factory()
+    if factory is None:
+        yield None
+        return
+
+    session = factory()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def get_database_url() -> str:

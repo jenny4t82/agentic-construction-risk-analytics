@@ -3,21 +3,25 @@ Agentic Construction Risk Intelligence Platform
 
 ## Current status
 
-The repository currently contains the initial backend foundation for Milestone
-1. It includes a rule-based Site Risk Agent, normalized observations,
-project-defined risk scoring, and automated tests using synthetic fixtures.
+The repository contains the Milestone 1 backend and dashboard foundation. It
+includes a rule-based Site Risk Agent, project-defined risk scoring, pending
+assessments for incomplete inputs, FastAPI endpoints, optional local YOLO image
+inference, PostgreSQL persistence, Alembic migrations, and a React + TypeScript +
+Vite dashboard with observation history.
 
-No real dataset, YOLO model, frontend, database, or external API has been
-integrated yet.
+The trained model weights and datasets remain local and are not committed. The
+standard `.venv` supports lightweight backend tests, while `.venv-yolo` is used
+for local Ultralytics inference.
 
 See [docs/milestone-1-foundation.md](docs/milestone-1-foundation.md) for the
-scoring formula, limitations, dataset status, and the planned relationship to
+scoring formula, limitations, dataset status, and implementation status for
 the five Milestone 1 deliverables.
 
 ## Run the FastAPI backend
 
-The backend currently uses synthetic observations and the existing rule-based
-Site Risk Agent. It does not download datasets or perform YOLO inference.
+The standard backend environment can run the rule-based agent and mock detector
+without ML dependencies. Real YOLO inference is available locally through the
+Python 3.13 `.venv-yolo` environment and the configured model weights.
 
 From the repository root, create or activate the Python 3.14 virtual
 environment, then install the runtime dependencies:
@@ -44,6 +48,14 @@ The API provides:
 - `GET /health` — checks that the backend is running.
 - `POST /assessments` — accepts one normalized observation and returns the
   supported hazard assessments.
+
+The API also provides:
+
+- `POST /assessments/image` for configured image hazard detection and risk
+  assessment.
+- `GET /observations` for saved observations when PostgreSQL is configured.
+- `GET /observations/{observation_id}` for one saved observation and its
+  detected hazards and assessments.
 
 FastAPI also provides interactive documentation at
 `http://127.0.0.1:8000/docs` while the server is running.
@@ -82,8 +94,11 @@ when required duration or repetition inputs are missing.
 
 ## PostgreSQL configuration
 
-The project uses SQLAlchemy with Psycopg 3 for PostgreSQL connectivity. No
-application tables are created yet; the shared schema will be finalized first.
+The project uses SQLAlchemy with Psycopg 3 for PostgreSQL connectivity. ORM
+models and an initial Alembic migration define the application persistence
+schema. The API uses `DATABASE_URL` when configured and remains stateless for
+ordinary tests when it is absent. Migrations are explicit and are not run
+automatically at application startup.
 
 Set `DATABASE_URL` in the local environment without committing credentials:
 
@@ -108,6 +123,22 @@ The optional PostgreSQL integration test uses `TEST_DATABASE_URL` and should
 point to a disposable test database. Without that variable, it is skipped:
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql+psycopg://USER:PASSWORD@localhost:5432/construction_risk_db_test"
+$env:TEST_DATABASE_URL = "postgresql+psycopg://USER:PASSWORD@localhost:5432/construction_risk_test_db"
 python -m unittest discover -s backend/tests -p "test_*.py"
 ```
+
+## Limitations and planned work
+
+The current YOLO integration supports only the explicitly mapped PPE violation
+classes (`NO-Hardhat`, `NO-Mask`, and `NO-Safety Vest`). The Construction-PPE
+dataset has not been downloaded or integrated, and the current fixtures are
+synthetic; they do not support model-accuracy claims.
+
+The project-defined formula is educational and is not an OSHA calculation or
+regulatory safety standard. The system does not estimate real accident
+probabilities and does not replace a safety professional or site inspection.
+
+LangGraph and four-agent orchestration are not implemented. The current
+application uses one rule-based Site Risk Agent. Live monitoring streams,
+authentication, production deployment, and external integrations remain
+planned work.

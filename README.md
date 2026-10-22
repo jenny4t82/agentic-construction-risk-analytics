@@ -14,8 +14,7 @@ standard `.venv` supports lightweight backend tests, while `.venv-yolo` is used
 for local Ultralytics inference.
 
 See [docs/milestone-1-foundation.md](docs/milestone-1-foundation.md) for the
-scoring formula, limitations, dataset status, and implementation status for
-the five Milestone 1 deliverables.
+scoring formula, limitations, dataset status.
 
 ## Run the FastAPI backend
 
@@ -138,7 +137,6 @@ The project-defined formula is educational and is not an OSHA calculation or
 regulatory safety standard. The system does not estimate real accident
 probabilities and does not replace a safety professional or site inspection.
 
-LangGraph and four-agent orchestration are not implemented. The current
-application uses one rule-based Site Risk Agent. Live monitoring streams,
+The current application uses one rule-based Site Risk Agent. Live monitoring streams,
 authentication, production deployment, and external integrations remain
 planned work.

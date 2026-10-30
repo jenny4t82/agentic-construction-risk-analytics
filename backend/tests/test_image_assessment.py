@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,9 +9,13 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+# Keep unit tests stateless even when the developer's root .env is present.
+os.environ["DATABASE_URL"] = ""
+
 from app.detector import (
     BoundingBox,
     MockHazardDetector,
+    YOLOv8HazardDetector,
     normalize_detection_label,
 )
 from app.main import app, get_hazard_detector
@@ -71,6 +76,40 @@ class DetectorUnitTests(unittest.TestCase):
         self.assertEqual(res.people_count, 2)
         self.assertEqual(set(res.hazard_labels), {"no_helmet", "no_vest"})
         self.assertEqual(res.max_confidence, 0.89)
+
+
+class DetectorSelectionTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        app.dependency_overrides.clear()
+
+    def test_default_repository_weights_are_selected_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            default_weights = Path(temp_dir) / "weights" / "best.pt"
+            default_weights.parent.mkdir()
+            default_weights.write_bytes(b"test weights")
+
+            with patch.dict(os.environ, {}, clear=True), patch(
+                "app.main.DEFAULT_WEIGHTS_PATH", default_weights
+            ):
+                detector = get_hazard_detector()
+
+            self.assertIsInstance(detector, YOLOv8HazardDetector)
+            self.assertEqual(detector.weights_path, str(default_weights))
+
+    def test_relative_configured_weights_are_resolved_from_project_root(self) -> None:
+        project_root = Path("C:/project-root")
+        with patch.dict(
+            os.environ,
+            {"HAZARD_DETECTOR_WEIGHTS": "weights/custom.pt"},
+            clear=True,
+        ), patch("app.main.PROJECT_ROOT", project_root), patch(
+            "app.main._get_yolo_detector"
+        ) as detector_factory:
+            get_hazard_detector()
+
+        detector_factory.assert_called_once_with(
+            str(project_root / "weights" / "custom.pt")
+        )
 
 
 class ImageAssessmentApiTests(unittest.TestCase):
@@ -244,7 +283,9 @@ class ImageAssessmentApiTests(unittest.TestCase):
 
     def test_unconfigured_detector_returns_503(self) -> None:
         app.dependency_overrides.clear()
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "app.main.DEFAULT_WEIGHTS_PATH", Path("missing-best.pt")
+        ):
             response = self.client.post(
                 "/assessments/image",
                 content=TINY_JPEG,
@@ -362,6 +403,159 @@ class ImageAssessmentApiTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 503)
             self.assertIn("service unavailable", response.json()["detail"].lower())
+
+
+class AnnotatedImageTests(unittest.TestCase):
+    """Tests for the annotated_image field returned with YOLO bounding boxes."""
+
+    @classmethod
+    def _make_real_png(cls, width: int = 100, height: int = 100) -> bytes:
+        """Create a real in-memory PNG that Pillow can decode."""
+        from PIL import Image as PILImage
+        import io as _io
+        img = PILImage.new("RGB", (width, height), color=(128, 128, 128))
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def setUp(self) -> None:
+        self.client = TestClient(app)
+        self.mock_detector = MockHazardDetector()
+        app.dependency_overrides[get_hazard_detector] = lambda: self.mock_detector
+
+    def tearDown(self) -> None:
+        app.dependency_overrides.clear()
+
+    def test_annotated_image_present_with_hazard_detections(self) -> None:
+        """When hazards are detected, response includes a valid base64 PNG."""
+        import base64
+        self.mock_detector.set_canned_boxes([
+            BoundingBox(class_name="NO-Hardhat", confidence=0.88,
+                        x_min=10, y_min=10, x_max=50, y_max=50),
+            BoundingBox(class_name="Person", confidence=0.95,
+                        x_min=5, y_min=5, x_max=90, y_max=90),
+        ])
+
+        real_png = self._make_real_png()
+        response = self.client.post(
+            "/assessments/image?duration_minutes=30&repeated_count=1",
+            content=real_png,
+            headers={"Content-Type": "image/png"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+
+        # annotated_image must be present and non-null
+        self.assertIn("annotated_image", result)
+        self.assertIsNotNone(result["annotated_image"])
+
+        # Must decode to valid PNG bytes
+        decoded = base64.b64decode(result["annotated_image"])
+        self.assertTrue(decoded.startswith(b"\x89PNG\r\n\x1a\n"),
+                        "annotated_image is not a valid PNG")
+
+    def test_annotated_image_present_when_no_hazards(self) -> None:
+        """Compliant-only images still get an annotated_image (no boxes drawn)."""
+        import base64
+        self.mock_detector.set_canned_boxes([
+            BoundingBox(class_name="Person", confidence=0.95,
+                        x_min=5, y_min=5, x_max=90, y_max=90),
+            BoundingBox(class_name="Hardhat", confidence=0.91,
+                        x_min=10, y_min=10, x_max=50, y_max=50),
+        ])
+
+        real_png = self._make_real_png()
+        response = self.client.post(
+            "/assessments/image",
+            content=real_png,
+            headers={"Content-Type": "image/png"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertIn("annotated_image", result)
+        self.assertIsNotNone(result["annotated_image"])
+
+        decoded = base64.b64decode(result["annotated_image"])
+        self.assertTrue(decoded.startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_annotated_image_null_when_image_not_decodable(self) -> None:
+        """Stub JPEG bytes that PIL cannot decode → annotated_image is None."""
+        self.mock_detector.set_canned_boxes([
+            BoundingBox(class_name="NO-Hardhat", confidence=0.88),
+        ])
+
+        # TINY_JPEG is valid enough for the magic-byte check but not PIL-decodable
+        response = self.client.post(
+            "/assessments/image",
+            content=TINY_JPEG,
+            headers={"Content-Type": "image/jpeg"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        # annotated_image should be null (graceful degradation)
+        self.assertIsNone(result["annotated_image"])
+
+    def test_annotated_image_with_multipart_upload(self) -> None:
+        """Multipart form upload also returns an annotated image."""
+        import base64
+        self.mock_detector.set_canned_boxes([
+            BoundingBox(class_name="NO-Safety Vest", confidence=0.82,
+                        x_min=20, y_min=20, x_max=80, y_max=80),
+        ])
+
+        real_png = self._make_real_png(200, 200)
+        response = self.client.post(
+            "/assessments/image",
+            files={"file": ("site.png", real_png, "image/png")},
+            data={"duration_minutes": "15", "repeated_count": "2"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertIsNotNone(result["annotated_image"])
+        decoded = base64.b64decode(result["annotated_image"])
+        self.assertTrue(decoded.startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_risk_scoring_unchanged_with_annotated_image(self) -> None:
+        """Risk scores must not change because of the annotated-image feature."""
+        self.mock_detector.set_canned_boxes([
+            BoundingBox(class_name="Person", confidence=0.95,
+                        x_min=5, y_min=5, x_max=90, y_max=90),
+            BoundingBox(class_name="Person", confidence=0.90,
+                        x_min=10, y_min=10, x_max=85, y_max=85),
+            BoundingBox(class_name="NO-Hardhat", confidence=0.88,
+                        x_min=15, y_min=15, x_max=55, y_max=55),
+            BoundingBox(class_name="NO-Safety Vest", confidence=0.82,
+                        x_min=20, y_min=20, x_max=60, y_max=60),
+        ])
+
+        real_png = self._make_real_png()
+        response = self.client.post(
+            "/assessments/image?duration_minutes=45&repeated_count=3&work_area=zone-north",
+            content=real_png,
+            headers={"Content-Type": "image/png"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+
+        # Same risk scores as the original test_image_assessment_with_violations_and_full_scoring
+        self.assertEqual(len(result["assessments"]), 2)
+        hazard_types = {a["hazard_type"] for a in result["assessments"]}
+        self.assertEqual(hazard_types, {"missing_safety_helmet", "missing_safety_vest"})
+
+        helmet = next(a for a in result["assessments"]
+                      if a["hazard_type"] == "missing_safety_helmet")
+        self.assertEqual(helmet["risk_score"], 40)
+        self.assertEqual(helmet["risk_band"], "High")
+
+        vest = next(a for a in result["assessments"]
+                    if a["hazard_type"] == "missing_safety_vest")
+        self.assertEqual(vest["risk_score"], 32)
+        self.assertEqual(vest["risk_band"], "Moderate")
 
 
 if __name__ == "__main__":

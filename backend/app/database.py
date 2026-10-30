@@ -6,14 +6,28 @@ live database or a DATABASE_URL environment variable.
 """
 
 import os
+from pathlib import Path
 from typing import Generator, Optional
 
+from dotenv import load_dotenv
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 
 DATABASE_URL_ENV = "DATABASE_URL"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE_PATH = PROJECT_ROOT / ".env"
+
+
+def load_project_environment() -> None:
+    """Load the repository-root ``.env`` without overriding external values."""
+
+    if DATABASE_URL_ENV not in os.environ:
+        load_dotenv(dotenv_path=ENV_FILE_PATH, override=False)
+
+
+load_project_environment()
 
 _cached_database_url: Optional[str] = None
 _cached_engine: Optional[Engine] = None

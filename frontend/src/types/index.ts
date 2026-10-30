@@ -25,6 +25,7 @@ export interface AssessmentsResponse {
   detected_hazards: DetectedHazardResponse[];
   assessments: AssessmentResponse[];
   pending_hazards: DetectedHazardResponse[];
+  annotated_image?: string | null;
 }
 
 export interface PersistedAssessmentResponse {

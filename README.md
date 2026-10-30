@@ -85,6 +85,15 @@ Remove-Item Env:HAZARD_DETECTOR_MODE -ErrorAction SilentlyContinue
 .\.venv-yolo\Scripts\python.exe -m uvicorn backend.app.main:app --reload
 ```
 
+The same startup can be run through the repeatable project script:
+
+```powershell
+.\scripts\start_backend_yolo.ps1
+```
+
+This script always selects `.venv-yolo`, disables Ultralytics auto-install, and
+resolves the local `weights/best.pt` checkpoint from the repository root.
+
 The model maps `NO-Hardhat`, `NO-Mask`, and `NO-Safety Vest` to the existing
 hazard labels. Compliant PPE, people, vehicles, and equipment are filtered
 from the hazard list; detected people are still used as the exposure count.

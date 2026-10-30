@@ -65,6 +65,20 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
       </div>
 
       <div className="p-6 space-y-6">
+        {/* Annotated Image with YOLO Bounding Boxes */}
+        {assessment.annotated_image && (
+          <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-900">
+            <div className="p-3 bg-slate-800 text-xs font-semibold text-slate-300 uppercase tracking-wider">
+              Detection Overlay
+            </div>
+            <img
+              src={`data:image/png;base64,${assessment.annotated_image}`}
+              alt="Annotated site image with detected hazards"
+              className="w-full h-auto object-contain"
+            />
+          </div>
+        )}
+
         {/* Zero Hazards Found State */}
         {!hasViolations && (
           <div className="p-6 rounded-xl bg-emerald-50/60 border border-emerald-200 text-center flex flex-col items-center">

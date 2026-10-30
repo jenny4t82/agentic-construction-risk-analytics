@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,11 +12,13 @@ from sqlalchemy.exc import SQLAlchemyError
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from app.database import (
+    ENV_FILE_PATH,
     check_database_connection,
     create_database_engine,
     get_database_url,
     get_engine,
     get_session_factory,
+    load_project_environment,
 )
 
 
@@ -29,6 +32,32 @@ class DatabaseConfigurationTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"DATABASE_URL": database_url}):
             self.assertEqual(get_database_url(), database_url)
+
+    def test_project_env_path_is_source_relative(self) -> None:
+        expected_path = Path(__file__).parents[2] / ".env"
+        self.assertEqual(ENV_FILE_PATH, expected_path.resolve())
+
+    def test_project_env_load_is_independent_of_current_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_file = Path(temp_dir) / ".env"
+            env_file.write_text("DATABASE_URL=from_file\n", encoding="utf-8")
+
+            with patch.dict(os.environ, {}, clear=True), patch(
+                "app.database.ENV_FILE_PATH", env_file
+            ), patch.object(Path, "cwd", return_value=Path(temp_dir)):
+                load_project_environment()
+                self.assertEqual(os.getenv("DATABASE_URL"), "from_file")
+
+    def test_external_environment_value_takes_precedence_over_project_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_file = Path(temp_dir) / ".env"
+            env_file.write_text("DATABASE_URL=from_file\n", encoding="utf-8")
+
+            with patch.dict(
+                os.environ, {"DATABASE_URL": "from_external"}, clear=True
+            ), patch("app.database.ENV_FILE_PATH", env_file):
+                load_project_environment()
+                self.assertEqual(os.getenv("DATABASE_URL"), "from_external")
 
     def test_missing_database_url_is_rejected(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

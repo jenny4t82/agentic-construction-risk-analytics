@@ -1,5 +1,6 @@
 """API tests for observation persistence, retrieval, and error handling."""
 
+import os
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -10,6 +11,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import OperationalError
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
+
+# Keep unit tests stateless even when the developer's root .env is present.
+os.environ["DATABASE_URL"] = ""
 
 from app.database import get_db
 from app.db_models import DetectedHazardRecord, Observation, RiskAssessment

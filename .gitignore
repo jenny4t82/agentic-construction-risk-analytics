@@ -42,3 +42,6 @@ models/*.onnx
 
 # Training outputs and YOLO runs
 runs/
+
+# Locally persisted observation images
+data/observations/

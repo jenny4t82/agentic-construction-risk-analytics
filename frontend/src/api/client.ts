@@ -127,3 +127,10 @@ export async function fetchObservationDetail(
   }
   return (await res.json()) as ObservationDetailResponse;
 }
+
+export function getObservationImageUrl(
+  observationId: string,
+  variant: 'original' | 'annotated'
+): string {
+  return `/observations/${encodeURIComponent(observationId)}/image/${variant}`;
+}

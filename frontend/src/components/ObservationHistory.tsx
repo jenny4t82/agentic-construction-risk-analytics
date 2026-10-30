@@ -16,6 +16,7 @@ import {
   formatConfidence,
   formatDateTime,
 } from '../utils/formatters';
+import { getObservationImageUrl } from '../api/client';
 
 interface ObservationHistoryProps {
   observations: ObservationDetailResponse[];
@@ -24,6 +25,48 @@ interface ObservationHistoryProps {
   error: string | null;
   onRefresh: () => void;
 }
+
+const ObservationImages: React.FC<{ observationId: string }> = ({ observationId }) => {
+  const [originalAvailable, setOriginalAvailable] = useState(true);
+  const [annotatedAvailable, setAnnotatedAvailable] = useState(true);
+
+  return (
+    <div>
+      <h5 className="font-bold text-slate-700 mb-2 uppercase tracking-wider text-[11px]">
+        Observation Images
+      </h5>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {originalAvailable && (
+          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+            <div className="px-3 py-2 text-xs font-semibold text-slate-600">Original upload</div>
+            <img
+              src={getObservationImageUrl(observationId, 'original')}
+              alt={`Original image for observation ${observationId}`}
+              className="w-full h-auto object-contain bg-slate-900"
+              onError={() => setOriginalAvailable(false)}
+            />
+          </div>
+        )}
+        {annotatedAvailable && (
+          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+            <div className="px-3 py-2 text-xs font-semibold text-slate-600">
+              Detection overlay
+            </div>
+            <img
+              src={getObservationImageUrl(observationId, 'annotated')}
+              alt={`Annotated image for observation ${observationId}`}
+              className="w-full h-auto object-contain bg-slate-900"
+              onError={() => setAnnotatedAvailable(false)}
+            />
+          </div>
+        )}
+      </div>
+      {!originalAvailable && !annotatedAvailable && (
+        <p className="text-slate-400 italic">Image unavailable for this observation.</p>
+      )}
+    </div>
+  );
+};
 
 export const ObservationHistory: React.FC<ObservationHistoryProps> = ({
   observations,
@@ -174,7 +217,7 @@ export const ObservationHistory: React.FC<ObservationHistoryProps> = ({
                           </span>
                           <span className="flex items-center space-x-1">
                             <MapPin className="w-3 h-3" />
-                            <span>{obs.work_area || 'unspecified'}</span>
+                            <span>{obs.work_area || 'Unknown'}</span>
                           </span>
                         </div>
                       </div>
@@ -223,6 +266,8 @@ export const ObservationHistory: React.FC<ObservationHistoryProps> = ({
                           </span>
                         </div>
                       </div>
+
+                      <ObservationImages observationId={obs.observation_id} />
 
                       {/* Detected Hazards in this observation */}
                       <div>

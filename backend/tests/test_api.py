@@ -1,5 +1,6 @@
 """API tests using the same synthetic fixtures as the agent tests."""
 
+import os
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -8,6 +9,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
+
+# Keep unit tests stateless even when the developer's root .env is present.
+os.environ["DATABASE_URL"] = ""
 
 from app.main import app
 

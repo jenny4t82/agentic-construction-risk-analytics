@@ -54,7 +54,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
       {/* Total Observations */}
       <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs hover:border-slate-300 transition-all">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-medium text-slate-500">Site Observations</span>
+          <span className="text-sm font-medium text-slate-500">Loaded Observations</span>
           <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
             <Eye className="w-4 h-4" />
           </div>
@@ -62,7 +62,7 @@ export const OverviewCards: React.FC<OverviewCardsProps> = ({
         <div className="flex items-baseline space-x-2">
           <span className="text-2xl font-bold text-slate-900">{totalObservations}</span>
           <span className="text-xs text-slate-400">
-            {isDatabaseConfigured ? 'saved in DB' : 'stateless session'}
+            {isDatabaseConfigured ? 'current page' : 'stateless session'}
           </span>
         </div>
       </div>

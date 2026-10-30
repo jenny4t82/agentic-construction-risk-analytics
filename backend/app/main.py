@@ -5,10 +5,12 @@ import logging
 import os
 from datetime import datetime, timezone
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -26,6 +28,9 @@ from .persistence import (
     list_observation_records,
     persist_observation_bundle,
 )
+from .utils.draw import draw_bounding_boxes
+from .image_storage import get_observation_image_path, save_observation_images
+from .db_models import Observation
 from .risk_agent import SiteRiskAgent
 
 
@@ -39,7 +44,7 @@ class ObservationRequest(BaseModel):
     people_count: Optional[int] = Field(default=None, ge=1)
     duration_minutes: Optional[int] = Field(default=None, ge=1)
     repeated_count: Optional[int] = Field(default=None, ge=0)
-    work_area: str = "unspecified"
+    work_area: Optional[str] = None
     detection_confidence: Optional[float] = Field(default=None, ge=0, le=1)
 
 
@@ -58,6 +63,7 @@ class AssessmentResponse(BaseModel):
     explanation: str
 
 
+
 class DetectedHazardResponse(BaseModel):
     """JSON representation of a detected hazard, scored or pending."""
 
@@ -74,6 +80,7 @@ class AssessmentsResponse(BaseModel):
     detected_hazards: list[DetectedHazardResponse]
     assessments: list[AssessmentResponse]
     pending_hazards: list[DetectedHazardResponse]
+    annotated_image: Optional[str] = None  # base64 PNG with YOLO boxes
 
 
 class PersistedAssessmentResponse(BaseModel):
@@ -222,6 +229,8 @@ def create_assessments(
 
 
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB limit
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_WEIGHTS_PATH = PROJECT_ROOT / "weights" / "best.pt"
 
 
 def get_hazard_detector() -> BaseHazardDetector:
@@ -229,6 +238,9 @@ def get_hazard_detector() -> BaseHazardDetector:
 
     In explicit mock mode (HAZARD_DETECTOR_MODE=mock), returns MockHazardDetector.
     If model weights are provided via HAZARD_DETECTOR_WEIGHTS, returns YOLOv8HazardDetector.
+    Relative weights paths are resolved from the repository root. When the
+    variable is unset, the repository's local weights/best.pt is used when it
+    exists. In unconfigured environments, returns UnconfiguredHazardDetector.
     In unconfigured environments, returns UnconfiguredHazardDetector which safely raises
     an error upon invocation rather than returning false zero-hazard compliance results.
     Can be overridden in tests via FastAPI's app.dependency_overrides.
@@ -239,7 +251,13 @@ def get_hazard_detector() -> BaseHazardDetector:
 
     weights_path = os.getenv("HAZARD_DETECTOR_WEIGHTS", "").strip()
     if weights_path:
-        return _get_yolo_detector(weights_path)
+        configured_path = Path(weights_path)
+        if not configured_path.is_absolute():
+            configured_path = PROJECT_ROOT / configured_path
+        return _get_yolo_detector(str(configured_path))
+
+    if DEFAULT_WEIGHTS_PATH.is_file():
+        return _get_yolo_detector(str(DEFAULT_WEIGHTS_PATH))
 
     return UnconfiguredHazardDetector()
 
@@ -331,6 +349,36 @@ def _parse_int_param(value: Optional[str], name: str, min_value: int) -> Optiona
     return val
 
 
+def _build_image_metadata(
+    observation_id: str,
+    image_bytes: bytes,
+    image_media_type: str,
+    annotated_image: Optional[str],
+    boxes: Any,
+) -> dict[str, Any]:
+    """Persist image files and detection geometry in safe observation metadata."""
+
+    metadata = save_observation_images(
+        observation_id=observation_id,
+        original_bytes=image_bytes,
+        original_media_type=image_media_type,
+        annotated_image_base64=annotated_image,
+    )
+    metadata["detections"] = [
+        {
+            "class_name": box.class_name,
+            "confidence": box.confidence,
+            "x_min": box.x_min,
+            "y_min": box.y_min,
+            "x_max": box.x_max,
+            "y_max": box.y_max,
+            "class_id": box.class_id,
+        }
+        for box in boxes
+    ]
+    return {"image": metadata}
+
+
 @app.post("/assessments/image", response_model=AssessmentsResponse)
 async def create_image_assessments(
     request: Request,
@@ -378,7 +426,7 @@ async def create_image_assessments(
     content_type = request.headers.get("content-type", "")
     image_bytes, form_fields = _extract_image_payload(raw_body, content_type)
 
-    _validate_image_bytes(image_bytes)
+    image_media_type = _validate_image_bytes(image_bytes)
 
     # Normalize observation ID: empty or whitespace-only inputs consistently generate a UUID
     raw_obs_id = (
@@ -390,7 +438,7 @@ async def create_image_assessments(
     resolved_work_area = (
         (work_area.strip() if work_area else "")
         or (form_fields.get("work_area", "").strip())
-        or "unspecified"
+        or None
     )
 
     raw_pc = people_count if people_count is not None else form_fields.get("people_count")
@@ -432,6 +480,27 @@ async def create_image_assessments(
     if resolved_people_count is None and detection.people_count >= 1:
         resolved_people_count = detection.people_count
 
+    if db is not None and db.get(Observation, resolved_obs_id) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Observation '{resolved_obs_id}' already exists",
+        )
+
+    annotated_image = draw_bounding_boxes(image_bytes, detection.boxes)
+    image_metadata = None
+    if db is not None:
+        try:
+            image_metadata = _build_image_metadata(
+                observation_id=resolved_obs_id,
+                image_bytes=image_bytes,
+                image_media_type=image_media_type,
+                annotated_image=annotated_image,
+                boxes=detection.boxes,
+            )
+        except (OSError, ValueError) as err:
+            logger.error("Failed to persist image for observation %s: %s", resolved_obs_id, err)
+            raise HTTPException(status_code=500, detail="Image persistence failed") from err
+
     if not detection.hazard_labels:
         if db is not None:
             try:
@@ -448,6 +517,7 @@ async def create_image_assessments(
                     detected_hazards=[],
                     assessments=[],
                     detector_name=type(detector).__name__,
+                    raw_metadata=image_metadata,
                 )
             except ValueError as err:
                 raise HTTPException(status_code=409, detail=str(err)) from err
@@ -461,11 +531,13 @@ async def create_image_assessments(
                     status_code=500, detail="Database persistence failed"
                 ) from err
 
+        # No hazards detected – return the original image with no hazard boxes.
         return AssessmentsResponse(
             observation_id=resolved_obs_id,
             detected_hazards=[],
             assessments=[],
             pending_hazards=[],
+            annotated_image=annotated_image,
         )
 
     try:
@@ -512,6 +584,7 @@ async def create_image_assessments(
                 detected_hazards=detected_hazards,
                 assessments=assessments,
                 detector_name=type(detector).__name__,
+                raw_metadata=image_metadata,
             )
         except ValueError as err:
             raise HTTPException(status_code=409, detail=str(err)) from err
@@ -533,6 +606,7 @@ async def create_image_assessments(
         ],
         assessments=assessments,
         pending_hazards=pending_hazards,
+        annotated_image=annotated_image,
     )
 
 
@@ -590,3 +664,43 @@ def get_observation(
             detail=f"Observation '{observation_id}' not found",
         )
     return ObservationDetailResponse.model_validate(record, from_attributes=True)
+
+
+@app.get("/observations/{observation_id}/image/{variant}")
+def get_observation_image(
+    observation_id: str,
+    variant: str,
+    db: Optional[Session] = Depends(get_db),
+) -> FileResponse:
+    """Return a retained original or annotated image for one observation."""
+
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database persistence is not configured. Set DATABASE_URL to enable persistence.",
+        )
+    try:
+        record = get_observation_record(db, observation_id=observation_id)
+    except SQLAlchemyError as err:
+        logger.error("Failed to query image metadata for observation %s: %s", observation_id, err)
+        raise HTTPException(
+            status_code=500, detail="Failed to query observation from database"
+        ) from err
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Observation not found")
+
+    metadata = (record.raw_metadata or {}).get("image")
+    try:
+        image_path, media_type = get_observation_image_path(
+            observation_id=observation_id,
+            variant=variant,
+            image_metadata=metadata,
+        )
+    except (FileNotFoundError, ValueError) as err:
+        raise HTTPException(
+            status_code=404,
+            detail="Image unavailable for this observation",
+        ) from err
+
+    return FileResponse(path=image_path, media_type=media_type)

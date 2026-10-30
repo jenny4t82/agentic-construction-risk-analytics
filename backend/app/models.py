@@ -16,7 +16,7 @@ class NormalizedObservation:
     people_count: Optional[int] = None
     duration_minutes: Optional[int] = None
     repeated_count: Optional[int] = None
-    work_area: str = "unspecified"
+    work_area: Optional[str] = None
     detection_confidence: Optional[float] = None
 
     def __post_init__(self) -> None:

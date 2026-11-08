@@ -6,6 +6,7 @@ interface ImageUploaderProps {
   onAnalyze: (file: File, params: ImageAssessmentParams) => Promise<void>;
   isLoading: boolean;
   error: string | null;
+  onClear?: () => void;
 }
 
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB limit matching backend MAX_IMAGE_SIZE
@@ -14,6 +15,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   onAnalyze,
   isLoading,
   error,
+  onClear,
 }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -67,6 +69,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     }
     setPreviewUrl(null);
     setClientError(null);
+    setObservationId('');
+    onClear?.();
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -95,7 +99,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         <div>
           <h2 className="text-lg font-bold text-slate-900">Upload Site Image for Risk Assessment</h2>
           <p className="text-sm text-slate-500">
-            Submit construction-site visual observations to detect PPE hazards and evaluate risk.
+            Record an image assessment with supported PPE findings and operator-provided context.
           </p>
         </div>
         <button
@@ -190,16 +194,18 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Work Area / Location
+                    Work Area / Zone
                   </label>
                   <input
                     type="text"
                     value={workArea}
                     onChange={(e) => setWorkArea(e.target.value)}
-                    placeholder="e.g. Sector-3 Scaffolding"
+                    placeholder="e.g. Zone A, North Scaffold, Excavation Bay"
+                    maxLength={255}
                     disabled={isLoading}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                   />
+                  <p className="mt-1 text-[11px] text-slate-500">Optional. Leave blank to record an unassigned work area.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
@@ -238,7 +244,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                      Repetitions
+                      Scoring repetition input
                     </label>
                     <input
                       type="number"
@@ -254,23 +260,21 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    People Count
+                    People exposed (operator override)
                   </label>
                   <input
                     type="number"
                     min="1"
                     value={peopleCount}
                     onChange={(e) => setPeopleCount(e.target.value)}
-                    placeholder="Auto from image"
+                    placeholder="Optional"
                     disabled={isLoading}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                   />
                 </div>
 
                 <div className="p-3 bg-amber-50/70 rounded-lg border border-amber-200/60 text-xs text-amber-800">
-                  <span className="font-semibold">Note on Risk Scoring:</span> Duration and repetitions
-                  are required to calculate risk scores (S × L × E). If omitted, hazards will be
-                  detected but kept in <span className="font-semibold">pending status</span>.
+                  <span className="font-semibold">Context for risk scoring:</span> Work area, exposure duration and repetition are operator-provided, not inferred from one image. If people count is blank, the backend may use detected persons; otherwise it remains missing. Missing context keeps supported findings <span className="font-semibold">pending</span>.
                 </div>
               </div>
             </div>

@@ -1,0 +1,283 @@
+{
+  "dataset_name": "Ultralytics Construction-PPE",
+  "official_source_url": "https://docs.ultralytics.com/datasets/detect/construction-ppe/",
+  "official_yaml_url": "https://github.com/ultralytics/ultralytics/blob/main/ultralytics/cfg/datasets/construction-ppe.yaml",
+  "official_download_url": "https://github.com/ultralytics/assets/releases/download/v0.0.0/construction-ppe.zip",
+  "download_date_utc": "2026-11-02",
+  "download_method": "PowerShell Invoke-WebRequest from the exact archive URL in the official Ultralytics dataset YAML; no training or automated Ultralytics training command was run.",
+  "dataset_version": {
+    "published_version": "1.0.0",
+    "published_version_source": "Official documentation citation metadata",
+    "version_field_in_downloaded_yaml": false,
+    "archive_release_tag": "v0.0.0",
+    "note": "The asset release tag is not a dataset version field."
+  },
+  "download_location": "datasets/external/ultralytics-construction-ppe/",
+  "archive_filename": "construction-ppe.zip",
+  "archive_size_bytes": 178415813,
+  "archive_sha256": "BEF8DCB599AA4E9D9F5E602CB6FA7143D3C84D7F6A0FF40463D7F2A4C2632CCC",
+  "archive_integrity": {
+    "zip_crc_test": "passed",
+    "entries_including_directories": 2852,
+    "uncompressed_bytes": 179301803,
+    "image_files": 1416,
+    "text_label_files": 1426,
+    "contains_data_yaml": true,
+    "contains_license_file": true,
+    "contains_per_image_source_manifest": false
+  },
+  "published_dataset": {
+    "image_count": 1416,
+    "split_counts": {
+      "train": 1132,
+      "val": 143,
+      "test": 141
+    },
+    "annotation_format": "Ultralytics YOLO detection: class_id x_center y_center width height; normalized coordinates",
+    "yaml_path": "datasets/external/ultralytics-construction-ppe/data.yaml",
+    "yaml_dataset_root_value": "construction-ppe",
+    "yaml_path_note": "The archived YAML points at the publisher's default construction-ppe directory name. This copy is extracted directly into the requested ultralytics-construction-ppe folder; preserve the original YAML and create a derived config pointing at the actual root only in a future approved integration phase.",
+    "image_root": "datasets/external/ultralytics-construction-ppe/images",
+    "label_root": "datasets/external/ultralytics-construction-ppe/labels",
+    "class_names": {
+      "0": "helmet",
+      "1": "gloves",
+      "2": "vest",
+      "3": "boots",
+      "4": "goggles",
+      "5": "none",
+      "6": "Person",
+      "7": "no_helmet",
+      "8": "no_goggle",
+      "9": "no_gloves",
+      "10": "no_boots"
+    },
+    "matched_image_instance_counts": {
+      "train": {
+        "helmet": 1341,
+        "gloves": 1146,
+        "vest": 1269,
+        "boots": 1235,
+        "goggles": 419,
+        "none": 651,
+        "Person": 1770,
+        "no_helmet": 400,
+        "no_goggle": 337,
+        "no_gloves": 442,
+        "no_boots": 88,
+        "total": 9098
+      },
+      "val": {
+        "helmet": 201,
+        "gloves": 136,
+        "vest": 171,
+        "boots": 151,
+        "goggles": 47,
+        "none": 81,
+        "Person": 239,
+        "no_helmet": 45,
+        "no_goggle": 41,
+        "no_gloves": 56,
+        "no_boots": 4,
+        "total": 1172
+      },
+      "test": {
+        "helmet": 192,
+        "gloves": 163,
+        "vest": 178,
+        "boots": 211,
+        "goggles": 52,
+        "none": 65,
+        "Person": 236,
+        "no_helmet": 40,
+        "no_goggle": 33,
+        "no_gloves": 58,
+        "no_boots": 23,
+        "total": 1251
+      },
+      "all_matched_images": {
+        "helmet": 1734,
+        "gloves": 1445,
+        "vest": 1618,
+        "boots": 1597,
+        "goggles": 518,
+        "none": 797,
+        "Person": 2245,
+        "no_helmet": 485,
+        "no_goggle": 411,
+        "no_gloves": 556,
+        "no_boots": 115,
+        "total": 11521
+      }
+    },
+    "no_gloves": {
+      "class_id": 9,
+      "instances_by_split": {
+        "train": 442,
+        "val": 56,
+        "test": 58,
+        "total": 556
+      },
+      "images_by_split": {
+        "train": 190,
+        "val": 23,
+        "test": 23,
+        "total": 236
+      },
+      "positive_gloves_instances": 1445,
+      "manual_sample_images": [
+        "datasets/external/ultralytics-construction-ppe/images/train/image1117.jpg",
+        "datasets/external/ultralytics-construction-ppe/images/val/image1129.jpg",
+        "datasets/external/ultralytics-construction-ppe/images/train/image1398.jpg"
+      ],
+      "manual_review_note": "The boxes target hand regions, but sampled settings include restaurant/eating, event or trade-show, and gym/exercise imagery. Whether missing gloves constitute a construction safety violation is unclear without an annotation policy; this is a semantic/domain concern, not a confirmed label error."
+    }
+  },
+  "inspection_results": {
+    "matched_label_files": 1416,
+    "missing_label_files": 0,
+    "empty_matched_label_files": 0,
+    "malformed_matched_label_rows": 0,
+    "invalid_class_ids": 0,
+    "invalid_or_out_of_frame_boxes": 0,
+    "orphan_train_label_files": 10,
+    "orphan_train_label_rows": 93,
+    "orphan_train_label_class_counts": {
+      "Person": 20,
+      "helmet": 16,
+      "gloves": 16,
+      "boots": 16,
+      "vest": 14,
+      "goggles": 8,
+      "none": 3
+    },
+    "orphan_train_label_filenames": [
+      "image940(1).txt",
+      "image941(1).txt",
+      "image944(1).txt",
+      "image945(1).txt",
+      "image946(1).txt",
+      "image947(1).txt",
+      "image948(1).txt",
+      "image949(1).txt",
+      "image95(1).txt",
+      "image950(1).txt"
+    ],
+    "duplicate_image_basenames_within_supplement": 0,
+    "image_dimensions": {
+      "distinct_width_height_combinations": 93,
+      "640x640": 1116,
+      "other_dimensions": 300,
+      "minimum_width": 408,
+      "maximum_width": 1024,
+      "minimum_height": 263,
+      "maximum_height": 1024
+    },
+    "class_none_semantics_documented": false,
+    "archive_has_per_image_provenance": false
+  },
+  "duplicate_investigation": {
+    "existing_dataset_images_compared": 717,
+    "supplement_images_compared": 1416,
+    "exact_sha256_duplicate_pairs": 0,
+    "shared_basenames": 0,
+    "perceptual_hash_method": "64-bit difference hash (dHash) computed with installed Pillow; ImageHash package was not installed and no dependency was added.",
+    "near_duplicate_threshold": "Hamming distance <= 5 of 64 bits",
+    "near_duplicate_candidate_pairs": 13,
+    "unique_supplement_images_with_near_candidate": 13,
+    "near_candidates_by_existing_split": {
+      "train": 4,
+      "val": 0,
+      "test": 9
+    },
+    "near_candidates_by_supplement_split": {
+      "train": 10,
+      "val": 3,
+      "test": 0
+    },
+    "candidate_pairs": [
+      {"supplement": "images/train/image685.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 1},
+      {"supplement": "images/train/image702.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 1},
+      {"supplement": "images/train/image730.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 1},
+      {"supplement": "images/train/image699.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 2},
+      {"supplement": "images/train/image712.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 2},
+      {"supplement": "images/val/image709.jpg", "existing": "train/images/image_170_jpg.rf.747403dbb5b1c349197c96146345786c.jpg", "hamming_distance": 2},
+      {"supplement": "images/train/image684.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 3},
+      {"supplement": "images/train/image725.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 3},
+      {"supplement": "images/train/image673.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 4},
+      {"supplement": "images/train/image724.jpg", "existing": "test/images/image_55_jpg.rf.bd0780b14a93c28b7d6af0558d1fdcaa.jpg", "hamming_distance": 4},
+      {"supplement": "images/val/image674.jpg", "existing": "train/images/image_153_jpg.rf.cdd9f88957c5b5b2844d12ae26f6917c.jpg", "hamming_distance": 4},
+      {"supplement": "images/val/image705.jpg", "existing": "train/images/image_46_jpg.rf.76033125e51ba32ce27ce3301753535d.jpg", "hamming_distance": 4},
+      {"supplement": "images/train/image693.jpg", "existing": "train/images/image_153_jpg.rf.cdd9f88957c5b5b2844d12ae26f6917c.jpg", "hamming_distance": 5}
+    ],
+    "visual_spot_check": "Confirmed at least one same-site/scene sequence across the existing test and supplementary train split around image_55_jpg... and image685.jpg; exact imagery/pose differs. Another same-site background candidate connects supplementary val/image709.jpg with an existing train image. All candidates remain review candidates; no files were moved/deleted."
+  },
+  "license_and_attribution": {
+    "dataset_license_as_published": "AGPL-3.0",
+    "archive_contains_agpl_license_text": true,
+    "attribution": "Cite Ultralytics Construction-PPE Dataset, authors Mrunmayee Dalvi, Niyati Singh, Sahil Bhingarde, Ketaki Chalke, publisher Ultralytics, version 1.0.0; retain applicable license notices.",
+    "per_image_source_rights_verified": false,
+    "archive_contains_image_source_manifest": false,
+    "legal_review_required": true,
+    "ultralytics_software_license_is_separate": true,
+    "official_software_license_note": "Ultralytics licensing page describes AGPL-3.0 as appropriate when the entire project is open-sourced under AGPL, and lists Enterprise licensing for commercial/proprietary products and services. This is separate from dataset licensing.",
+    "application_source_license_found_in_workspace": false,
+    "checkpoint_specific_license_or_data_provenance_reviewed": false,
+    "model_or_dataset_redistribution_assumed_permitted": false,
+    "legal_note": "The dataset archive's AGPL text does not by itself verify underlying photograph rights or determine obligations for derived labels, model parameters, hosted use, or the combined application. Obtain publisher clarification and legal review before commercial training, distribution, or deployment."
+  },
+  "existing_class_mapping": [
+    {"existing_id": 0, "existing_class": "Excavator", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 1, "existing_class": "Gloves", "supplement_class": "gloves", "supplement_id": 1, "status": "candidate direct; verify subtype and box policy"},
+    {"existing_id": 2, "existing_class": "Hardhat", "supplement_class": "helmet", "supplement_id": 0, "status": "candidate direct; verify head/helmet box policy"},
+    {"existing_id": 3, "existing_class": "Ladder", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 4, "existing_class": "Mask", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 5, "existing_class": "NO-Hardhat", "supplement_class": "no_helmet", "supplement_id": 7, "status": "candidate direct violation; verify annotation policy"},
+    {"existing_id": 6, "existing_class": "NO-Mask", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 7, "existing_class": "NO-Safety Vest", "supplement_class": null, "supplement_id": null, "status": "no equivalent; docs say no no-vest class"},
+    {"existing_id": 8, "existing_class": "Person", "supplement_class": "Person", "supplement_id": 6, "status": "candidate direct; verify box conventions"},
+    {"existing_id": 9, "existing_class": "SUV", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 10, "existing_class": "Safety Cone", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 11, "existing_class": "Safety Vest", "supplement_class": "vest", "supplement_id": 2, "status": "candidate direct; verify extent/policy"},
+    {"existing_id": 12, "existing_class": "bus", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 13, "existing_class": "dump truck", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 14, "existing_class": "fire hydrant", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 15, "existing_class": "machinery", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 16, "existing_class": "mini-van", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 17, "existing_class": "sedan", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 18, "existing_class": "semi", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 19, "existing_class": "trailer", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 20, "existing_class": "truck", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 21, "existing_class": "truck and trailer", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 22, "existing_class": "van", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 23, "existing_class": "vehicle", "supplement_class": null, "supplement_id": null, "status": "no equivalent"},
+    {"existing_id": 24, "existing_class": "wheel loader", "supplement_class": null, "supplement_id": null, "status": "no equivalent"}
+  ],
+  "supplement_only_classes": [
+    {"id": 3, "class": "boots", "existing_equivalent": null},
+    {"id": 4, "class": "goggles", "existing_equivalent": null},
+    {"id": 5, "class": "none", "existing_equivalent": null, "semantics": "not defined in inspected documentation"},
+    {"id": 8, "class": "no_goggle", "existing_equivalent": null},
+    {"id": 9, "class": "no_gloves", "existing_equivalent": null, "note": "planned feature requiring new schema/application support"},
+    {"id": 10, "class": "no_boots", "existing_equivalent": null}
+  ],
+  "compatibility_assessment": {
+    "dataset_ready_for_integration": false,
+    "reasons": [
+      "AGPL/image-rights scope requires legal and publisher clarification.",
+      "Ten orphan training label files contain 93 unmatched annotation rows.",
+      "none class semantics and no_gloves annotation policy are undocumented.",
+      "Thirteen dHash candidates include nine supplementary train images near the frozen existing test split."
+    ],
+    "existing_dataset_or_model_modified": false,
+    "dataset_merge_or_retraining_performed": false
+  },
+  "relevant_urls": {
+    "dataset_docs": "https://docs.ultralytics.com/datasets/detect/construction-ppe/",
+    "dataset_yaml": "https://github.com/ultralytics/ultralytics/blob/main/ultralytics/cfg/datasets/construction-ppe.yaml",
+    "archive": "https://github.com/ultralytics/assets/releases/download/v0.0.0/construction-ppe.zip",
+    "dataset_license_docs": "https://www.ultralytics.com/license",
+    "software_license": "https://github.com/ultralytics/ultralytics/blob/main/LICENSE",
+    "agpl_text": "https://www.gnu.org/licenses/agpl-3.0.html"
+  }
+}

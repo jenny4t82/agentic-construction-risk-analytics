@@ -1,12 +1,12 @@
 import React from 'react';
 import {
   ShieldAlert,
-  ShieldCheck,
   Clock,
   Sparkles,
-  CheckCircle2,
+  Info,
 } from 'lucide-react';
 import type { AssessmentsResponse } from '../types';
+import { SafetyDecisionPanel } from './SafetyDecisionPanel';
 import {
   formatHazardType,
   formatRiskBand,
@@ -30,10 +30,10 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
             className={`w-10 h-10 rounded-lg flex items-center justify-center ${
               hasViolations
                 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : 'bg-slate-500/20 text-slate-300 border border-slate-500/30'
             }`}
           >
-            {hasViolations ? <ShieldAlert className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
+            {hasViolations ? <ShieldAlert className="w-5 h-5" /> : <Info className="w-5 h-5" />}
           </div>
           <div>
             <div className="flex items-center space-x-2">
@@ -43,7 +43,7 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Site Risk Agent inference and educational rule-based scoring
+              Detected evidence and risk assessment for this observation
             </p>
           </div>
         </div>
@@ -65,6 +65,8 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
       </div>
 
       <div className="p-6 space-y-6">
+        <SafetyDecisionPanel decision={assessment.safety_decision} />
+
         {/* Annotated Image with YOLO Bounding Boxes */}
         {assessment.annotated_image && (
           <div className="rounded-xl border border-slate-200 overflow-hidden bg-slate-900">
@@ -81,16 +83,16 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
 
         {/* Zero Hazards Found State */}
         {!hasViolations && (
-          <div className="p-6 rounded-xl bg-emerald-50/60 border border-emerald-200 text-center flex flex-col items-center">
-            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mb-3">
-              <CheckCircle2 className="w-6 h-6" />
+          <div className="p-6 rounded-xl bg-slate-50 border border-slate-200 text-center flex flex-col items-center">
+            <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center mb-3">
+              <Info className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-semibold text-emerald-900 mb-1">
-              Compliant Site Conditions
+            <h3 className="text-base font-semibold text-slate-900 mb-1">
+              No supported explicit PPE violation detected
             </h3>
-            <p className="text-sm text-emerald-700 max-w-md">
-              No PPE violations or supported hazards were detected in the inspected image. All
-              compliant workers and equipment have been filtered.
+            <p className="text-sm text-slate-600 max-w-md">
+              This does not confirm complete PPE compliance. The detector reports only supported
+              explicit violation classes found in this image.
             </p>
           </div>
         )}
@@ -118,9 +120,6 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
                           <h4 className="font-semibold text-slate-900 text-base">
                             {formatHazardType(ass.hazard_type)}
                           </h4>
-                          <span className="text-xs font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
-                            source: {ass.source_label}
-                          </span>
                         </div>
                         <span
                           className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border ${bandStyle.badgeClass}`}
@@ -191,8 +190,9 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
                   Pending Assessments ({pending_hazards.length})
                 </h4>
                 <p className="text-xs text-amber-700 mt-0.5">
-                  Hazards were identified by visual detection, but risk scoring requires operational
-                  exposure duration and repetitions.
+                  Supported findings were recorded, but required scoring inputs or consistent
+                  assessment evidence are incomplete. Safety Officer/Admin can complete the persisted
+                  assessment below or in Observation History without re-uploading the image.
                 </p>
               </div>
             </div>
@@ -206,9 +206,6 @@ export const AssessmentResults: React.FC<AssessmentResultsProps> = ({ assessment
                   <div>
                     <span className="font-semibold text-slate-800 block">
                       {formatHazardType(hazard.hazard_type)}
-                    </span>
-                    <span className="text-[11px] text-slate-400 font-mono">
-                      label: {hazard.source_label}
                     </span>
                   </div>
                   <div className="text-right">

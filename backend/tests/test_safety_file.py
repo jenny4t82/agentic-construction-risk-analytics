@@ -192,12 +192,13 @@ class SafetyAgentTests(unittest.TestCase):
         self.assertEqual(assessment.assessments, ())
         self.assertEqual(assessment.recommendations[0].priority, "pending")
 
-    def test_supported_violation_proposes_alert(self) -> None:
+    def test_unscored_violation_remains_pending(self) -> None:
         decision = decide_alert(assess_safety(make_detection_result("NO-Mask")))
 
-        self.assertTrue(decision.alert_recommended)
+        self.assertFalse(decision.alert_recommended)
+        self.assertEqual(decision.outcome, "pending")
         self.assertEqual(decision.priority, "pending")
-        self.assertIn("explicit supported PPE violation", decision.reason)
+        self.assertIn("complete, consistent risk assessment is unavailable", decision.reason)
 
     def test_compliant_only_detection_does_not_propose_alert(self) -> None:
         decision = decide_alert(

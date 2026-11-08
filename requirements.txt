@@ -4,4 +4,6 @@ SQLAlchemy>=2.0,<3
 psycopg[binary]>=3.0,<4
 alembic>=1.13,<2
 pillow>=10.0
+fpdf2>=2.8,<3
 python-dotenv>=1.0,<2
+langgraph>=1.2.18,<2

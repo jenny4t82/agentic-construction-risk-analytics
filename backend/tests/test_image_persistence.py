@@ -21,6 +21,7 @@ from app.image_storage import get_observation_image_path, save_observation_image
 from app.main import _build_image_metadata, app
 from app.database import get_db
 from app.db_models import Observation
+from app.auth import get_current_user
 
 
 def png_bytes(width: int = 120, height: int = 80) -> bytes:
@@ -80,6 +81,7 @@ class ImagePersistenceTests(unittest.TestCase):
                 session = MagicMock()
                 session.execute.return_value.scalar_one_or_none.return_value = observation
                 app.dependency_overrides[get_db] = lambda: session
+                app.dependency_overrides[get_current_user] = lambda: object()
                 try:
                     response = TestClient(app).get(
                         "/observations/image-test-2/image/annotated"
@@ -100,6 +102,7 @@ class ImagePersistenceTests(unittest.TestCase):
             raw_metadata={"image": {"storage_key": "wrong"}},
         )
         app.dependency_overrides[get_db] = lambda: session
+        app.dependency_overrides[get_current_user] = lambda: object()
         try:
             client = TestClient(app)
             unavailable = client.get("/observations/image-test-3/image/original")

@@ -19,6 +19,7 @@ from app.database import get_db
 from app.db_models import DetectedHazardRecord, Observation, RiskAssessment
 from app.detector import BoundingBox, MockHazardDetector
 from app.main import app, get_hazard_detector
+from app.auth import get_current_user
 
 
 TINY_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\xff\xd9"
@@ -27,6 +28,7 @@ TINY_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff
 class ObservationApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
+        app.dependency_overrides[get_current_user] = lambda: object()
         self.mock_db = MagicMock()
         self.mock_db.get.return_value = None
 

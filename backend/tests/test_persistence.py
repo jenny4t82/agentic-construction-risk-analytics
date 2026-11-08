@@ -9,17 +9,83 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from app.db_models import DetectedHazardRecord, Observation, RiskAssessment
+from app.db_models import Alert, DetectedHazardRecord, Observation, RiskAssessment
 from app.models import DetectedHazard, HazardAssessment
 from app.persistence import (
     build_observation_bundle,
     get_observation_record,
     list_observation_records,
     persist_observation_bundle,
+    update_alert_status,
 )
 
 
 class PersistenceMappingUnitTests(unittest.TestCase):
+    def test_bundle_preserves_pending_finding_without_open_alert(self) -> None:
+        observation = build_observation_bundle(
+            observation_id="obs-alert-001",
+            timestamp=datetime(2026, 3, 15, 9, 0, tzinfo=timezone.utc),
+            source="camera",
+            detected_hazards=[
+                DetectedHazard(
+                    observation_id="obs-alert-001",
+                    hazard_type="missing_safety_vest",
+                    source_label="no_vest",
+                    detection_confidence=0.88,
+                )
+            ],
+        )
+
+        self.assertEqual(observation.alerts, [])
+        self.assertEqual(observation.raw_metadata["safety_decision"]["outcome"], "pending")
+        self.assertEqual(observation.detected_hazards[0].assessments[0].status, "pending")
+
+    def test_alert_status_transitions_are_forward_only_and_timestamped(self) -> None:
+        alert = Alert(alert_id=41, status="open")
+        session = MagicMock()
+        session.get.return_value = alert
+
+        update_alert_status(session, 41, "acknowledged")
+        self.assertEqual(alert.status, "acknowledged")
+        self.assertIsNotNone(alert.acknowledged_at)
+        self.assertIsNone(alert.dismissed_at)
+
+        update_alert_status(session, 41, "resolved")
+        self.assertEqual(alert.status, "resolved")
+        self.assertIsNotNone(alert.resolved_at)
+        self.assertIsNone(alert.dismissed_at)
+
+        with self.assertRaisesRegex(ValueError, "cannot transition"):
+            update_alert_status(session, 41, "open")
+
+    def test_dismissal_has_its_own_timestamp_and_preserves_history(self) -> None:
+        created_at = datetime(2026, 3, 15, tzinfo=timezone.utc)
+        alert = Alert(alert_id=43, status="open", created_at=created_at)
+        session = MagicMock()
+        session.get.return_value = alert
+        self.assertIsNone(alert.dismissed_at)
+        update_alert_status(session, 43, "acknowledged")
+        acknowledged_at = alert.acknowledged_at
+        update_alert_status(session, 43, "dismissed")
+        self.assertEqual(alert.status, "dismissed")
+        self.assertIsNotNone(alert.dismissed_at)
+        self.assertIsNotNone(alert.dismissed_at.tzinfo)
+        self.assertEqual(alert.acknowledged_at, acknowledged_at)
+        self.assertEqual(alert.created_at, created_at)
+        self.assertIsNone(alert.resolved_at)
+        with self.assertRaisesRegex(ValueError, "cannot transition"):
+            update_alert_status(session, 43, "resolved")
+
+    def test_same_alert_status_is_idempotent(self) -> None:
+        alert = Alert(alert_id=42, status="acknowledged")
+        session = MagicMock()
+        session.get.return_value = alert
+
+        update_alert_status(session, 42, "acknowledged")
+
+        self.assertIsNone(alert.acknowledged_at)
+        session.flush.assert_not_called()
+
     def test_completed_assessment_mapping(self) -> None:
         now = datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc)
         hazard = DetectedHazard(

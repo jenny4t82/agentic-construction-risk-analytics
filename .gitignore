@@ -45,3 +45,15 @@ runs/
 
 # Locally persisted observation images
 data/observations/
+
+# Local diagnostics, private editor state and generated evidence
+.vscode/
+diagnostics/
+reports/model-evaluation/outputs/
+*.pdf
+*.sql
+*.dump
+*.sqlite
+*.sqlite3
+*.db
+*.log

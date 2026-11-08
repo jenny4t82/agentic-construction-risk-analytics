@@ -14,11 +14,16 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 os.environ["DATABASE_URL"] = ""
 
 from app.main import app
+from app.auth import get_current_user
 
 
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
+        app.dependency_overrides[get_current_user] = lambda: object()
+
+    def tearDown(self) -> None:
+        app.dependency_overrides.clear()
 
     def test_health_endpoint(self) -> None:
         response = self.client.get("/health")

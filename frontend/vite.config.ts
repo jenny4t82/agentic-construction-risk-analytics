@@ -19,6 +19,26 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      '/experimental': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/auth': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/alerts': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/analytics': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/reports': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     },
   },
 })

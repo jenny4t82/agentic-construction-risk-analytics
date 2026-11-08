@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from .detector import normalize_detection_label
+from .decision_engine import BAND_POLICY, SafetyDecision, evaluate_safety_decision
 from .models import DetectedHazard, HazardAssessment, NormalizedObservation
 from .risk_agent import LABEL_TO_HAZARD, SiteRiskAgent
 
@@ -71,14 +72,7 @@ class SafetyAssessment:
     recommendations: tuple[SafetyRecommendationDraft, ...]
 
 
-@dataclass(frozen=True)
-class AlertDecision:
-    """Explainable alert proposal; no notification is sent by this module."""
-
-    alert_recommended: bool
-    reason: str
-    evidence: tuple[SafetyHazardEvidence, ...]
-    priority: str
+AlertDecision = SafetyDecision
 
 
 RECOMMENDATIONS: dict[str, str] = {
@@ -247,12 +241,8 @@ def _priority_for_assessment(assessment: Optional[HazardAssessment]) -> str:
 
     if assessment is None:
         return "pending"
-    return {
-        "Critical": "urgent",
-        "High": "high",
-        "Moderate": "medium",
-        "Low": "routine",
-    }.get(assessment.risk_band, "pending")
+    policy = BAND_POLICY.get(assessment.risk_band)
+    return policy[1] if policy is not None else "pending"
 
 
 def build_safety_recommendations(
@@ -334,48 +324,9 @@ def assess_safety(
 
 
 def decide_alert(assessment: SafetyAssessment) -> AlertDecision:
-    """Propose an explainable alert for explicit supported PPE violations.
-
-    This function does not send an alert. A pending risk score does not become
-    a fabricated score; the decision remains explicitly based on model
-    evidence and reports ``pending`` priority when scoring is unavailable.
-    """
-
-    if not assessment.evidence:
-        return AlertDecision(
-            alert_recommended=False,
-            reason="No supported explicit PPE violation was detected.",
-            evidence=(),
-            priority="none",
-        )
-
-    priority_order = {
-        "pending": 0,
-        "routine": 1,
-        "medium": 2,
-        "high": 3,
-        "urgent": 4,
-    }
-    priority = max(
-        (recommendation.priority for recommendation in assessment.recommendations),
-        key=lambda value: priority_order.get(value, 0),
-        default="pending",
-    )
-
-    if assessment.assessments:
-        reason = (
-            "Alert proposed because explicit supported PPE violation evidence was "
-            f"detected; highest available risk priority is {priority}."
-        )
-    else:
-        reason = (
-            "Alert proposed because explicit supported PPE violation evidence was "
-            "detected; risk assessment remains pending."
-        )
-
-    return AlertDecision(
-        alert_recommended=True,
-        reason=reason,
-        evidence=assessment.evidence,
-        priority=priority,
+    """Apply the shared pure decision policy to experimental Safety Agent output."""
+    return evaluate_safety_decision(
+        assessment.detected_hazards,
+        assessment.assessments,
+        detection_complete=assessment.detections is not None,
     )

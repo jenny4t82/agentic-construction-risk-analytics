@@ -19,6 +19,7 @@ from app.detector import (
     normalize_detection_label,
 )
 from app.main import app, get_hazard_detector
+from app.auth import get_current_user
 
 
 # Valid minimal image fixtures
@@ -115,6 +116,7 @@ class DetectorSelectionTests(unittest.TestCase):
 class ImageAssessmentApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
+        app.dependency_overrides[get_current_user] = lambda: object()
         self.mock_detector = MockHazardDetector()
         app.dependency_overrides[get_hazard_detector] = lambda: self.mock_detector
 
@@ -141,7 +143,12 @@ class ImageAssessmentApiTests(unittest.TestCase):
         result = response.json()
         self.assertEqual(len(result["detected_hazards"]), 2)
         self.assertEqual(result["pending_hazards"], [])
+
         self.assertEqual(len(result["assessments"]), 2)
+        self.assertEqual(result["safety_decision"]["outcome"], "alert")
+        self.assertEqual(result["safety_decision"]["risk_band"], "High")
+        self.assertEqual(result["safety_decision"]["priority"], "high")
+        self.assertEqual(len(result["safety_decision"]["supporting_evidence"]), 2)
 
         hazard_types = {a["hazard_type"] for a in result["assessments"]}
         self.assertEqual(
@@ -166,6 +173,45 @@ class ImageAssessmentApiTests(unittest.TestCase):
         self.assertEqual(vest_assessment["risk_score"], 32)
         self.assertEqual(vest_assessment["risk_band"], "Moderate")
 
+    def test_single_violation_uses_its_detection_confidence(self) -> None:
+        self.mock_detector.set_canned_boxes([
+            BoundingBox(class_name="Person", confidence=0.99),
+            BoundingBox(class_name="NO-Hardhat", confidence=0.61),
+        ])
+        response = self.client.post(
+            "/assessments/image?duration_minutes=20&repeated_count=0",
+            content=TINY_JPEG, headers={"Content-Type": "image/jpeg"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["detected_hazards"][0]["detection_confidence"], 0.61)
+        self.assertEqual(payload["assessments"][0]["detection_confidence"], 0.61)
+
+    def test_matching_class_maximum_does_not_leak_across_hazards(self) -> None:
+        self.mock_detector.set_canned_boxes([
+            BoundingBox(class_name="NO-Hardhat", confidence=0.61),
+            BoundingBox(class_name="NO-Hardhat", confidence=0.73),
+            BoundingBox(class_name="NO-Safety Vest", confidence=0.77),
+            BoundingBox(class_name="Person", confidence=0.99),
+        ])
+        response = self.client.post(
+            "/assessments/image?people_count=1&duration_minutes=20&repeated_count=0",
+            content=TINY_JPEG, headers={"Content-Type": "image/jpeg"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        expected = {"missing_safety_helmet": 0.73, "missing_safety_vest": 0.77}
+        for field in ("detected_hazards", "assessments"):
+            self.assertEqual(
+                {item["hazard_type"]: item["detection_confidence"] for item in payload[field]},
+                expected,
+            )
+        self.assertEqual(
+            {item["hazard_type"]: item["detection_confidence"]
+             for item in payload["safety_decision"]["supporting_evidence"]},
+            expected,
+        )
+
     def test_compliant_only_image_yields_no_hazards(self) -> None:
         self.mock_detector.set_canned_boxes(
             [
@@ -187,6 +233,8 @@ class ImageAssessmentApiTests(unittest.TestCase):
         self.assertEqual(result["detected_hazards"], [])
         self.assertEqual(result["assessments"], [])
         self.assertEqual(result["pending_hazards"], [])
+        self.assertEqual(result["safety_decision"]["outcome"], "no_alert")
+        self.assertIn("does not confirm site safety", result["safety_decision"]["reason"])
 
     def test_pending_hazards_when_scoring_inputs_missing(self) -> None:
         self.mock_detector.set_canned_boxes(
@@ -207,6 +255,7 @@ class ImageAssessmentApiTests(unittest.TestCase):
         self.assertEqual(len(result["detected_hazards"]), 1)
         self.assertEqual(result["assessments"], [])
         self.assertEqual(len(result["pending_hazards"]), 1)
+        self.assertEqual(result["safety_decision"]["outcome"], "pending")
         self.assertEqual(
             result["pending_hazards"][0]["hazard_type"], "missing_safety_helmet"
         )
@@ -282,7 +331,7 @@ class ImageAssessmentApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_unconfigured_detector_returns_503(self) -> None:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_hazard_detector, None)
         with patch.dict(os.environ, {}, clear=True), patch(
             "app.main.DEFAULT_WEIGHTS_PATH", Path("missing-best.pt")
         ):
@@ -295,7 +344,7 @@ class ImageAssessmentApiTests(unittest.TestCase):
             self.assertIn("not configured", response.json()["detail"].lower())
 
     def test_explicit_mock_mode_via_environment(self) -> None:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_hazard_detector, None)
         with patch.dict(os.environ, {"HAZARD_DETECTOR_MODE": "mock"}):
             response = self.client.post(
                 "/assessments/image",
@@ -390,7 +439,7 @@ class ImageAssessmentApiTests(unittest.TestCase):
         self.assertEqual(response.json()["detected_hazards"], [])
 
     def test_missing_weights_path_returns_controlled_503(self) -> None:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_hazard_detector, None)
         with patch.dict(
             os.environ,
             {"HAZARD_DETECTOR_WEIGHTS": "nonexistent_model_weights.pt"},
@@ -420,6 +469,7 @@ class AnnotatedImageTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.client = TestClient(app)
+        app.dependency_overrides[get_current_user] = lambda: object()
         self.mock_detector = MockHazardDetector()
         app.dependency_overrides[get_hazard_detector] = lambda: self.mock_detector
 

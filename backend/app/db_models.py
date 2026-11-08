@@ -32,6 +32,27 @@ class Base(DeclarativeBase):
     """Base class for all PostgreSQL ORM models."""
 
 
+class UserAccount(Base):
+    """Login identity; public signup may only assign the regular user role."""
+
+    __tablename__ = "user_accounts"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('user', 'safety_officer', 'admin')",
+            name="ck_user_accounts_role",
+        ),
+    )
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, server_default="user")
+    is_active: Mapped[bool] = mapped_column(nullable=False, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Observation(Base):
     """Persisted input observation, including nullable risk inputs."""
 
@@ -395,6 +416,9 @@ class Alert(Base):
         DateTime(timezone=True), nullable=True
     )
     resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    dismissed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

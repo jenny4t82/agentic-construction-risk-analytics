@@ -1,11 +1,11 @@
 import React from 'react';
-import { HardHat, Activity, Database } from 'lucide-react';
+import { HardHat, Activity, Database, FlaskConical } from 'lucide-react';
 
 interface NavbarProps {
   isBackendHealthy: boolean;
   isDatabaseConfigured: boolean;
-  activeTab: 'dashboard' | 'history';
-  setActiveTab: (tab: 'dashboard' | 'history') => void;
+  activeTab: 'dashboard' | 'history' | 'experimental';
+  setActiveTab: (tab: 'dashboard' | 'history' | 'experimental') => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -56,6 +56,17 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               Observation History
+            </button>
+            <button
+              onClick={() => setActiveTab('experimental')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center space-x-1.5 ${
+                activeTab === 'experimental'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-amber-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              <span>Experimental Viewer</span>
             </button>
           </div>
 

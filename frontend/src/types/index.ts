@@ -176,6 +176,14 @@ export interface ObservationDetailResponse {
   created_at?: string | null;
   updated_at?: string | null;
   detected_hazards: PersistedHazardResponse[];
+  overall_risk_score: number | null;
+  overall_risk_band: RiskBand | null;
+  overall_risk_provisional: boolean;
+  overall_risk_status: 'assessed' | 'provisional' | 'pending' | 'incomplete' | 'no_supported_findings';
+  completed_assessment_count: number;
+  pending_assessment_count: number;
+  incomplete_assessment_count: number;
+  total_assessed_findings: number;
 }
 
 export interface ExperimentalDetectionItem {

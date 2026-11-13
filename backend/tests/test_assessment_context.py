@@ -6,6 +6,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
+from app.assessment_queries import overall_risk_summary
 from app.db_models import Base, Observation, DetectedHazardRecord, RiskAssessment, Alert, UserAccount
 from app.auth import get_current_user
 from app.main import app
@@ -82,11 +84,57 @@ class AssessmentContextTests(unittest.TestCase):
             self.assertEqual(result["total"], 1)
             self.assertEqual(result["assessment_counts"]["Pending"], 1)
             self.assertEqual(result["items"][0]["assessment_counts"], {"Pending": 1, "Low": 1, "Moderate": 0, "High": 1, "Critical": 0})
+            summary = result["items"][0]
+            self.assertEqual((summary["overall_risk_score"], summary["overall_risk_band"]), (40, "High"))
+            self.assertTrue(summary["overall_risk_provisional"])
+            self.assertEqual(summary["overall_risk_status"], "provisional")
+            self.assertEqual((summary["completed_assessment_count"], summary["pending_assessment_count"], summary["total_assessed_findings"]), (2, 1, 3))
         for band in ("Moderate", "Critical"):
             self.assertEqual(self.client.get(f"/observation-query?risk={band}").json()["total"], 0)
         result = self.client.get("/observation-query?offset=1").json()
         self.assertEqual(result["items"], [])
         self.assertEqual(result["assessment_counts"]["Pending"], 1)
+
+    def test_overall_risk_all_pending_no_findings_and_malformed_scores(self):
+        for assessment in self.assessments:
+            assessment.status = "pending"
+            assessment.severity = assessment.likelihood = assessment.exposure = None
+            assessment.risk_score = assessment.risk_band = None
+        empty = Observation(observation_id="no-supported-findings", observed_at=self.now,
+            source="test", raw_metadata={})
+        self.db.add(empty); self.db.commit()
+        all_pending = self.client.get("/observations/mixed").json()
+        self.assertEqual(all_pending["overall_risk_status"], "pending")
+        self.assertIsNone(all_pending["overall_risk_score"])
+        self.assertEqual(all_pending["pending_assessment_count"], 3)
+        no_findings = self.client.get("/observations/no-supported-findings").json()
+        self.assertEqual(no_findings["overall_risk_status"], "no_supported_findings")
+        self.assertIsNone(no_findings["overall_risk_band"])
+        malformed = SimpleNamespace(detected_hazards=[SimpleNamespace(assessments=[SimpleNamespace(
+            assessment_version=1, status="completed", risk_score=None)])])
+        invalid = overall_risk_summary(malformed)
+        self.assertEqual(invalid["overall_risk_status"], "incomplete")
+        self.assertIsNone(invalid["overall_risk_score"])
+        self.assertEqual(invalid["incomplete_assessment_count"], 1)
+        self.assertEqual(invalid["completed_assessment_count"], 1)
+
+    def test_overall_risk_equal_scores_latest_correction_and_query_paging(self):
+        self.assessments[0].risk_score = 40
+        self.assessments[0].risk_band = "High"
+        self.db.commit()
+        mixed = self.client.get("/observation-query?risk=High&limit=1").json()
+        self.assertEqual(mixed["total"], 1)
+        self.assertEqual(mixed["items"][0]["overall_risk_score"], 40)
+        self.assertEqual(mixed["items"][0]["overall_risk_band"], "High")
+        self.assertEqual(mixed["items"][0]["overall_risk_status"], "provisional")
+        correction = self.request(self.assessments[0], people_count=4, duration_minutes=10, repeated_count=1)
+        self.assertEqual(correction.status_code, 200, correction.text)
+        # The sibling with score 40 ties; max aggregation remains 40, never sum/average.
+        detail = self.client.get("/observations/mixed").json()
+        self.assertEqual(detail["overall_risk_score"], 40)
+        self.assertEqual(detail["overall_risk_band"], "High")
+        self.assertEqual(detail["completed_assessment_count"], 2)
+        self.assertEqual(self.client.get("/observation-query?risk=Pending&limit=1&offset=0").json()["items"][0]["overall_risk_score"], 40)
 
     def test_multi_pending_completion_recovery_and_duplicate_protection(self):
         observation = Observation(observation_id="isolated-multi-pending", observed_at=self.now,
@@ -239,6 +287,10 @@ class AssessmentContextTests(unittest.TestCase):
         self.assessments[0].risk_score = 20; self.assessments[0].risk_band = "Moderate"
         self.db.commit()
         self.assertEqual(self.client.get("/observation-query?risk=Pending").json()["total"], 0)
+        summary = self.client.get("/observations/mixed").json()
+        self.assertEqual((summary["overall_risk_score"], summary["overall_risk_band"]), (100, "Critical"))
+        self.assertEqual(summary["overall_risk_status"], "assessed")
+        self.assertEqual(summary["completed_assessment_count"], 3)
         for band in ("Moderate", "High", "Critical"):
             self.assertEqual(self.client.get(f"/observation-query?risk={band}").json()["total"], 1)
         self.assertEqual(self.request(self.assessments[1]).status_code, 409)

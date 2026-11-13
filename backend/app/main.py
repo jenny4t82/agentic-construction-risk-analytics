@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -57,7 +57,7 @@ from .report_pdf import render_safety_report_pdf
 from .safety_agent import assess_safety, decide_alert, detect_objects, load_model
 from .safety_graph import run_safety_graph
 from .assessment_context import assessment_state, correct_assessment, find_assessment
-from .assessment_queries import query_observations, summarize
+from .assessment_queries import overall_risk_summary, query_observations, summarize
 
 
 class ObservationRequest(BaseModel):
@@ -179,6 +179,46 @@ class ObservationDetailResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     detected_hazards: list[PersistedHazardResponse] = []
+
+    @computed_field
+    @property
+    def overall_risk_score(self) -> Optional[int]:
+        return overall_risk_summary(self)["overall_risk_score"]
+
+    @computed_field
+    @property
+    def overall_risk_band(self) -> Optional[str]:
+        return overall_risk_summary(self)["overall_risk_band"]
+
+    @computed_field
+    @property
+    def overall_risk_provisional(self) -> bool:
+        return overall_risk_summary(self)["overall_risk_provisional"]
+
+    @computed_field
+    @property
+    def overall_risk_status(self) -> str:
+        return overall_risk_summary(self)["overall_risk_status"]
+
+    @computed_field
+    @property
+    def completed_assessment_count(self) -> int:
+        return overall_risk_summary(self)["completed_assessment_count"]
+
+    @computed_field
+    @property
+    def pending_assessment_count(self) -> int:
+        return overall_risk_summary(self)["pending_assessment_count"]
+
+    @computed_field
+    @property
+    def incomplete_assessment_count(self) -> int:
+        return overall_risk_summary(self)["incomplete_assessment_count"]
+
+    @computed_field
+    @property
+    def total_assessed_findings(self) -> int:
+        return overall_risk_summary(self)["total_assessed_findings"]
 
 
 class WorkAreaUpdateRequest(BaseModel):

@@ -469,6 +469,7 @@ export function ObservationHistory({
 
       {/* 3. Risk & Assessment Filter Tabs */}
       <div className="bg-white rounded-2xl border border-slate-200 p-2 shadow-2xs">
+        <p className="px-2 pb-1 text-[10px] text-slate-500">Risk tabs match individual findings; each card shows the observation’s highest confirmed risk.</p>
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
           {RISK_TABS.map((tab) => {
             const isSelected = selectedRisk === tab.id;

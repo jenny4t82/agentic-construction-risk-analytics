@@ -23,6 +23,46 @@ endpoint for all new editing and pending-completion UI.
 
 ## Query contract
 
+### Phase 8.1D observation-level risk summary
+
+Both `GET /observation-query` items and `GET /observations/{observation_id}`
+include a backend-derived summary. It does not replace or rewrite individual
+assessment rows or history:
+
+```ts
+type OverallRiskSummary = {
+  overall_risk_score: number | null;
+  overall_risk_band: 'Low' | 'Moderate' | 'High' | 'Critical' | null;
+  overall_risk_provisional: boolean;
+  overall_risk_status: 'assessed' | 'provisional' | 'pending' | 'incomplete' | 'no_supported_findings';
+  completed_assessment_count: number;
+  pending_assessment_count: number;
+  incomplete_assessment_count: number;
+  total_assessed_findings: number;
+};
+```
+
+For each detected finding, only its latest `assessment_version` is effective.
+The overall score is the maximum valid score (1–100) among those latest
+completed assessments; the band is derived through the existing `risk_band`
+policy. Scores are never summed or averaged. `provisional` is true when a valid
+maximum exists while at least one finding is Pending or incomplete. If every
+finding is Pending, score and band are null and status is `pending`. Missing
+assessment rows and malformed completed scores are counted as incomplete and
+never treated as Pending or assigned an invented score. No findings yields
+`no_supported_findings` and null score/band; it is not evidence that the site is
+safe. Counts are finding counts, and `completed_assessment_count` counts latest
+completed rows even when their score is malformed (such a row also increments
+`incomplete_assessment_count`).
+
+Risk query tabs and existing facets retain their original existential,
+individual-finding semantics: e.g. High matches an observation with at least
+one latest High finding, even if its overall maximum is Critical. The collapsed
+Safety Incidents card shows only the overall maximum classification; expanded
+details show per-finding risk. The summary is computed from persisted latest
+assessment versions at read time, so corrections take effect without rewriting
+prior assessment snapshots or adding duplicate derived columns.
+
 Authenticated `GET /observation-query`:
 
 | Parameter | Contract |
@@ -194,6 +234,19 @@ pending-completion form remains compatible. No redesigned controls/cards/styles.
 
 ## Verification and limitations
 
+### Phase 8.1D final regression status — 2026-11-13
+
+This section records the isolated automated regression run. Its initial browser
+attachment limitation was subsequently resolved; the final connected sign-off
+is recorded below.
+
+The full isolated backend suite ran 213 tests successfully; nine PostgreSQL
+integration tests were skipped because `TEST_DATABASE_URL` was unset. Frontend
+TypeScript/Vite build and lint passed; lint reports seven existing warnings.
+`git diff --check` passed. At the time of this automated regression run, the
+integrated browser had not yet attached and connected data comparison was
+pending. No saved local/demo data was changed by the isolated run.
+
 Changed files:
 
 - Backend: [main.py](../backend/app/main.py), [persistence.py](../backend/app/persistence.py),
@@ -219,6 +272,30 @@ The complete filtered set is aggregated in server memory before pagination,
 consistent with existing reporting. Large deployments need SQL aggregation and
 performance work. Query reads use normal transaction isolation, not a guaranteed
 multi-statement snapshot during concurrent writers. PostgreSQL concurrent-request
-testing and connected-browser verification remain outstanding. The existing
+testing remains outstanding; connected browser verification is complete as
+recorded below. The existing
 suite emitted nonfatal Ultralytics asset-network warnings and an Alembic
 deprecation warning. Scoring/model/policy remain provisional as before.
+
+### Phase 8.1D connected browser sign-off — 2026-11-13
+
+Authenticated verification completed at `http://127.0.0.1:5173`; the browser's
+`localhost:5173` origin did not share the session and redirected to login. All
+observation risk facets were checked and remain individual-finding filters:
+All 27, Pending 1, Critical 2, High 11, Moderate 16, Low 13. The displayed
+explanation states that each card carries the observation's highest confirmed
+risk. The mixed-risk High-45 observation appears in High, Moderate, and Low.
+Reference `img-obs-1852c096` showed overall High 60, provisional, one Pending;
+assessment #50 remained High 60 and #51 remained Pending. The expanded finding
+breakdown, separate safety decision, both evidence previews, and assessment
+controls were present. No-supported-finding cards retain the not-safe disclaimer.
+Responsive checks at 390, 768 and 1280 pixels showed no horizontal overflow;
+mobile navigation opened and Escape returned focus to its trigger.
+
+Read-only GET snapshots of observations (including assessment/audit metadata)
+and alerts matched before/after: 27 observations, 13 alerts, canonical digest
+`20ee15da920d35ef6b848612ba8e0371c57deb1121658e55ba9c7f781a345c3f`. Alert
+statuses remained 5 open, 1 acknowledged, 5 resolved and 2 dismissed. No live
+observation with every finding Pending exists, so this state was not exercised
+in the browser; isolated tests cover it. Connected Phase 8.1D verification is
+complete and ready for Git sign-off. No saved data was changed.

@@ -15,7 +15,6 @@ import type {
   AssessmentCompletionResponse,
   ObservationDetailResponse,
   PersistedAssessmentResponse,
-  RiskBand,
   SafetyDecisionResponse,
 } from '../types';
 import { useAuth } from '../auth/AuthContext';
@@ -119,15 +118,6 @@ export function ObservationRow({
 
   const pendingCount = pendingAssessments.length;
 
-  // Distinct risk bands for summary row badges
-  const distinctBands = Array.from(
-    new Set(
-      completedAssessments
-        .map((item) => item.assessment?.risk_band)
-        .filter((b): b is RiskBand => Boolean(b))
-    )
-  );
-
   const handleCopyId = (e: React.MouseEvent) => {
     e.stopPropagation();
     void navigator.clipboard.writeText(obs.observation_id);
@@ -218,39 +208,33 @@ export function ObservationRow({
                 {hazardCount} {hazardCount === 1 ? 'PPE Finding' : 'PPE Findings'}
               </span>
 
-              {/* Visible Pending Count Badge (High Visibility) */}
-              {pendingCount > 0 && (
+              {/* One authoritative observation-level risk; individual bands remain expanded below. */}
+              {obs.overall_risk_status === 'no_supported_findings' ? (
+                <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200" title="No supported PPE findings were recorded; this does not establish that the site is safe.">
+                  No assessed PPE risk · No supported findings
+                </span>
+              ) : obs.overall_risk_score != null && obs.overall_risk_band ? (
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${formatRiskBand(obs.overall_risk_band).badgeClass}`}>
+                  <span>Overall risk · {obs.overall_risk_band} · {obs.overall_risk_score}</span>
+                </span>
+              ) : obs.overall_risk_status === 'pending' ? (
+                <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">Overall risk · Pending</span>
+              ) : (
+                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">Overall risk unavailable · Assessment incomplete</span>
+              )}
+
+              {/* Pending/provisional state is separate from the overall band. */}
+              {obs.pending_assessment_count > 0 && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300 ring-2 ring-amber-400/20 animate-pulse">
                   <AlertCircle size={12} className="text-amber-700" />
                   <span>
-                    {pendingCount} Pending Context
+                    {obs.pending_assessment_count} Pending{obs.overall_risk_score != null ? ' · provisional' : ' Context'}
                   </span>
                 </span>
               )}
-
-              {/* Risk Band Badges for Completed Assessments */}
-              {distinctBands.map((band) => {
-                const bandStyle = formatRiskBand(band);
-                const countForBand = completedAssessments.filter(
-                  (item) => item.assessment?.risk_band === band
-                ).length;
-                return (
-                  <span
-                    key={band}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold border ${bandStyle.badgeClass}`}
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full ${bandStyle.dotClass}`} />
-                    <span>{band}</span>
-                    {countForBand > 1 && <span className="opacity-75">({countForBand})</span>}
-                  </span>
-                );
-              })}
-
-              {/* Zero-Hazard Neutral State */}
-              {hazardCount === 0 && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
-                  <Shield size={11} className="text-slate-400" />
-                  <span>No PPE Violations Detected (Neutral)</span>
+              {obs.overall_risk_provisional && pendingCount === 0 && (
+                <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                  Provisional · incomplete assessment
                 </span>
               )}
             </div>
@@ -259,7 +243,7 @@ export function ObservationRow({
 
         {/* Right: Overall Safety Decision snapshot & Expand control */}
         <div className="flex items-center justify-between md:justify-end gap-3 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
-          {pendingCount > 0 ? <span className="text-xs text-amber-800">Assessment in progress</span> : decision ? (
+          {decision ? (
             <div className="text-left md:text-right">
               <span className="text-[10px] uppercase tracking-wider text-slate-400 block font-semibold">
                 Overall Decision

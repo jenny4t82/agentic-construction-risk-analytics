@@ -405,3 +405,58 @@ generated reports or caches are included. Preserved baseline branch remains
 `94677ccc21684aab26d078037e2bd0bd06dc917a` (same peeled baseline commit).
 No production writes, detector runs, Phase 8.1D or Phase 8.2 work in this checkpoint.
 Earlier connected verification and its documented coverage limits still apply.
+
+### Phase 8.1D overall observation risk aggregation — 2026-11-13
+
+Added a derived overall summary to observation detail and query items. For each
+finding the latest assessment version is considered; only valid completed
+scores (1–100) participate, and the overall score is their maximum, classified
+with the existing risk-band policy. No scoring formula, thresholds, alert
+policy, assessment history, or database schema changed. Pending and incomplete
+findings make a valid maximum provisional; all-Pending, malformed/missing, and
+no-supported-finding states return null scores with explicit statuses. Existing
+risk filters/facets remain per-finding existential filters. The collapsed
+Safety Incidents card now presents one overall risk badge, while expanded
+findings retain individual bands and the safety decision stays separate.
+
+Automated verification: full isolated backend discovery ran 213 tests successfully;
+nine PostgreSQL integration tests were skipped because `TEST_DATABASE_URL` was
+unset to prevent access to any saved database. Frontend TypeScript/Vite
+production build passes. Lint exits successfully with seven existing warnings.
+`git diff --check` passes (line-ending notices only). At this point the
+integrated browser had not attached, so live saved-observation rendering and
+before/after observation/alert comparisons were pending. Tests used
+isolated data and no local/demo records were modified. No Phase 8.2 work,
+staging, or commit was performed.
+
+Intermediate browser attempt (superseded by the final sign-off below): the shared integrated browser still
+reported `http://127.0.0.1:5173/#login` and rendered the sign-in form despite
+the user reporting a successful sign-in. Per instruction, no further browser
+refresh/re-authentication or server restart was attempted. No authenticated
+observation/alert snapshots were captured, so live-card behavior and before/
+after data equality remain unverified. No application data requests or writes
+were made during this blocked attempt; connected sign-off was pending then.
+
+Final connected Phase 8.1D sign-off — 2026-11-13: the shared browser was
+authenticated at `http://127.0.0.1:5173`; `localhost:5173` was unauthenticated
+and redirected to login, so verification stayed on the authenticated 127.0.0.1
+origin. Read-only observation and alert GET snapshots returned 27 observations
+and 13 alerts before and after verification. The same canonical projection
+digest was `20ee15da920d35ef6b848612ba8e0371c57deb1121658e55ba9c7f781a345c3f`;
+alert statuses remained 5 open, 1 acknowledged, 5 resolved, and 2 dismissed.
+Reference `img-obs-1852c096` remained High 60, provisional, with 1 Pending:
+assessment #50 was completed High 60 and #51 remained Pending. Cards displayed
+one overall risk badge, separate decision, and expanded individual findings.
+All risk tabs were checked: All 27, Pending 1, Critical 2, High 11, Moderate
+16, Low 13. The interface clearly states that tabs match individual findings;
+the mixed-risk High-45 observation appeared in High, Moderate, and Low. Original
+and annotated evidence loaded (2752×1536); no-supported-finding cards carried
+the explicit disclaimer that this does not establish the site is safe.
+Mobile navigation opened as a dialog and Escape restored focus to its trigger.
+Mobile/tablet/desktop widths had no horizontal overflow. No all-Pending
+observation exists in the current local data, so that state remains verified
+only by isolated tests. No user data was modified. Earlier 213-pass backend
+validation, frontend build, lint, and whitespace results remain applicable;
+this browser-only sign-off changed documentation only. Phase 8.1D is ready for
+Git sign-off, with live all-Pending presentation as the noted data-availability
+limitation. No Phase 8.2 work or commit was performed.

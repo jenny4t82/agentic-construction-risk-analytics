@@ -1,5 +1,33 @@
 # PROJECT HANDOVER CONTEXT
 
+Latest Phase 8.1D connected sign-off: authenticated browser verification
+completed at `http://127.0.0.1:5173`. The earlier login-screen blocker was
+resolved by consistently using the authenticated `127.0.0.1` origin; `localhost`
+is a separate origin. Read-only checks confirmed the overall risk cards,
+individual findings, risk facets, evidence, and responsive navigation. Before/
+after API snapshots found 27 observations and 13 alerts unchanged. An all-Pending
+observation was unavailable in live data and remains covered by isolated tests.
+See the progress log and assessment API contract for details.
+
+## Phase 8.1D overall observation risk aggregation — 2026-11-13
+
+Observation detail and query items now expose a derived overall summary. It
+selects the latest assessment per finding, takes the maximum valid completed
+score, and uses the existing authoritative risk-band function. Risk tabs/facets
+remain existential per-individual-finding filters for compatibility. Mixed
+completed/Pending results carry a provisional overall maximum; all-Pending,
+incomplete/malformed, and no-supported-finding observations expose null score
+and explicit statuses. The collapsed Safety Incidents row shows one overall
+risk classification; expanded finding scores, correction/audit history, alert
+policy and decision semantics remain independent and unchanged. See the
+[assessment API contract](docs/phase-8-1a-assessment-contracts.md#phase-81d-observation-level-risk-summary).
+Automated regression: 213 isolated backend tests pass; nine PostgreSQL
+integration tests skipped because TEST_DATABASE_URL was unset. Frontend
+build/TypeScript and lint pass (seven existing warnings), and `git diff --check`
+passes. Authenticated connected verification and read-only saved-record
+comparison are complete as recorded below. Isolated tests did not touch saved
+local/demo records. No Phase 8.2 work was performed.
+
 ## Phase 8.1A current update — 2026-11-09
 
 Multi-Pending follow-up: analysis now keeps the persisted observation card and
@@ -1089,3 +1117,23 @@ def normalize_detection_label(raw_label: str) -> Optional[str]:
 
 *Updated 2026-11-06 after Phase 7A on branch `feature/safety-agent-visual-test`.*
 *The normal startup selects `safesite_local` at migration head `0003_alert_dismissed_at`. Phase 7A added an audited Safety Officer/Admin work-area edit to existing Observations, plus authenticated Reports preview and PDF export filtered by optional half-open observation time and exact selected named work areas. Four real images submitted through the normal local workflow historically produced 4 Observations, 3 supported hazards, 3 assessments, and 2 Alerts for connected verification. On 2026-11-06 those four named verification observations, all linked safety rows, and their eight owned image files were removed after checking database identity, dependencies, storage ownership, and absence of `safesite_demo` references. Current `safesite_local` safety-record counts are zero; its three active local accounts and schema remain. The preserved `safesite_demo` remains the optional mentor fallback with 15 observations, 13 hazards, 13 assessments, and 7 alerts. No risk, decision, alert, or recurrence policy changed. Reporting still uses free-text areas and loads records in memory; policy approval, notification delivery, shared image-file storage across databases, independent manual-alert concurrency and real-world model accuracy remain open.*
+
+### Phase 8.1D connected verification — 2026-11-13
+
+The final authenticated browser checks used `http://127.0.0.1:5173`; `localhost`
+is a separate unauthenticated origin. `safesite_local` returned 27 observations
+and 13 alerts in read-only snapshots before and after verification, with an
+identical canonical digest (`20ee15da920d35ef6b848612ba8e0371c57deb1121658e55ba9c7f781a345c3f`).
+Alert statuses remained 5 open, 1 acknowledged, 5 resolved and 2 dismissed.
+`img-obs-1852c096` remains overall High 60, provisional with one Pending;
+assessment #50 is High 60 and #51 is Pending. Cards show one overall risk badge,
+expanded cards retain per-finding scores, and the safety decision is separate.
+Risk tabs are explicitly described as individual-finding filters (counts:
+All 27, Pending 1, Critical 2, High 11, Moderate 16, Low 13). The mixed-risk
+High-45 observation appears in High, Moderate, and Low. Evidence previews load;
+no-supported-finding cards disclaim that this is not proof of safety. Mobile,
+tablet and desktop viewports had no horizontal overflow; mobile navigation
+closed with Escape and restored focus. No all-Pending observation is currently
+available in live data, so that state remains covered by isolated tests only.
+Phase 8.1D is ready for Git sign-off. No live data changed; no Phase 8.2 work,
+staging or commit was performed.

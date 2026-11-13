@@ -83,6 +83,53 @@ export interface PendingAssessmentContext {
   repeated_count?: number;
 }
 
+export type AssessmentFilter = 'All' | 'Pending' | RiskBand;
+export type AssessmentCounts = Record<Exclude<AssessmentFilter, 'All'>, number>;
+export interface ObservationFilters {
+  risk?: AssessmentFilter;
+  work_area?: string;
+  start?: string;
+  end?: string;
+  observation_id?: string;
+  sort?: 'newest' | 'oldest';
+  limit?: number;
+  offset?: number;
+}
+export interface ObservationQueryResponse {
+  items: (ObservationDetailResponse & { assessment_counts: AssessmentCounts })[];
+  total: number;
+  limit: number;
+  offset: number;
+  assessment_counts: AssessmentCounts;
+  observation_counts: AssessmentCounts;
+  unfiltered_risk_total: number;
+}
+export interface AssessmentContextResponse {
+  observation_id: string;
+  detected_hazard_id: number;
+  assessment_id: number;
+  revision: number;
+  context: { people_count: number | null; duration_minutes: number | null; repeated_count: number | null };
+  assessment: PersistedAssessmentResponse;
+  safety_decision: SafetyDecisionResponse;
+  audit_history: AssessmentCorrectionAudit[];
+  reconciliation: { review_required: boolean; alert_ids: number[]; reason: string | null; state: 'review_required' | 'linked' | 'deferred_pending' | 'unchanged' };
+}
+export interface AssessmentCorrectionAudit {
+  assessment_id: number;
+  revision: number;
+  previous_values: AssessmentContextResponse['context'];
+  updated_values: Required<PendingAssessmentContext>;
+  previous_result: { status: string; risk_score: number | null; risk_band: RiskBand | null };
+  updated_result: { status: string; risk_score: number; risk_band: RiskBand };
+  previous_decision: SafetyDecisionResponse;
+  updated_decision: SafetyDecisionResponse;
+  previous_observation_decision: SafetyDecisionResponse | null;
+  updated_observation_decision: SafetyDecisionResponse;
+  changed_by_user_id: string;
+  changed_at: string;
+}
+
 export interface AssessmentCompletionResponse {
   assessment_id: number;
   observation_id: string;
@@ -208,6 +255,9 @@ export interface AlertAssessmentSummary {
 export type AlertStatus = 'open' | 'acknowledged' | 'resolved' | 'dismissed';
 
 export interface AlertDetailResponse {
+  review_required: boolean;
+  reconciliation_reason: string | null;
+  current_assessment: AlertAssessmentSummary | null;
   alert_id: number;
   observation_id: string;
   detected_hazard_id?: number | null;

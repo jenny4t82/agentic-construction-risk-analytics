@@ -1,4 +1,7 @@
 import type {
+  AssessmentContextResponse,
+  ObservationFilters,
+  ObservationQueryResponse,
   AssessmentsResponse,
   AssessmentCompletionResponse,
   AlertDetailResponse,
@@ -15,6 +18,37 @@ import type {
 } from '../types';
 
 const TOKEN_KEY = 'safesite.access_token';
+
+export async function queryObservations(filters: ObservationFilters = {}): Promise<ObservationQueryResponse> {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => { if (value !== undefined) query.set(key, String(value)); });
+  const res = await apiFetch(`/observation-query?${query}`);
+  const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new ApiError(res.status, `Safety Incidents API returned a non-JSON response (HTTP ${res.status}). Check the /observation-query proxy to http://127.0.0.1:8000 and restart the frontend dev server if needed.`);
+  }
+  if (!res.ok) throw new ApiError(res.status, await parseError(res, 'Unable to query observations'));
+  try {
+    return await res.json() as ObservationQueryResponse;
+  } catch {
+    throw new ApiError(res.status, 'Safety Incidents API returned invalid JSON. Check the backend response and try again.');
+  }
+}
+
+export async function fetchAssessmentContext(id: number): Promise<AssessmentContextResponse> {
+  const res = await apiFetch(`/assessments/${id}`);
+  if (!res.ok) throw new ApiError(res.status, await parseError(res, 'Unable to load assessment'));
+  return await res.json() as AssessmentContextResponse;
+}
+
+export async function correctAssessmentContext(id: number, expected_revision: number, context: Required<PendingAssessmentContext>): Promise<AssessmentContextResponse> {
+  const res = await apiFetch(`/assessments/${id}/context`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expected_revision, ...context }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await parseError(res, 'Unable to correct assessment'));
+  return await res.json() as AssessmentContextResponse;
+}
 const SESSION_EXPIRED_EVENT = 'safesite:session-expired';
 
 export function getAccessToken(): string | null {

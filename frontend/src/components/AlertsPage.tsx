@@ -49,6 +49,8 @@ function LifecycleTimes({ alert }: { alert: AlertDetailResponse }) {
     ['Resolved', alert.resolved_at],
     ['Dismissed', alert.dismissed_at],
   ].filter((entry): entry is [string, string] => Boolean(entry[1]));
-  if (events.length === 0) return null;
-  return <p className="mt-2 text-xs text-slate-500">{events.map(([label, timestamp]) => <span key={label} className="mr-3 inline-block">{label}: {formatTime(timestamp)}</span>)}</p>;
+  return <div>
+    {alert.review_required && <p role="status" className="mt-2 text-sm text-amber-800">Review required: assessment context was corrected. Historical alert: {alert.risk_band}; current assessment: {alert.current_assessment?.risk_band ?? 'Pending'}. Alert lifecycle is unchanged.</p>}
+    <p className="mt-2 text-xs text-slate-500">{events.map(([label, timestamp]) => <span key={label} className="mr-3 inline-block">{label}: {formatTime(timestamp)}</span>)}</p>
+  </div>;
 }

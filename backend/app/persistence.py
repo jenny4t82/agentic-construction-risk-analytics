@@ -375,6 +375,17 @@ def create_alert_for_hazard(
             f"'{detected_hazard_id}' not found"
         )
 
+    # Serialize manual creation with completion/correction for this observation.
+    session.execute(select(Observation).where(
+        Observation.observation_id == hazard.observation_id
+    ).with_for_update())
+    session.expire(observation, ["detected_hazards"])
+    session.expire(hazard, ["assessments"])
+    for item in observation.detected_hazards:
+        session.expire(item, ["assessments"])
+        for current in item.assessments:
+            session.refresh(current)
+
     existing = session.execute(
         select(Alert).where(Alert.detected_hazard_id == detected_hazard_id)
     ).scalar_one_or_none()
@@ -494,7 +505,9 @@ def complete_pending_assessment(
     resolved: dict[str, int] = {}
     supplied_missing: dict[str, int] = {}
     for key in ("people_count", "duration_minutes", "repeated_count"):
-        existing = getattr(observation, key)
+        existing = (observation.raw_metadata or {}).get("assessment_contexts", {}).get(
+            str(assessment_id), {}
+        ).get(key, getattr(observation, key))
         supplied = submitted.get(key)
         if existing is not None and supplied is not None and existing != supplied:
             raise AssessmentCompletionConflict(
@@ -553,6 +566,9 @@ def complete_pending_assessment(
             "new_context": supplied_missing,
             "resolved_context": resolved,
         },
+    }
+    metadata["assessment_contexts"] = {
+        **metadata.get("assessment_contexts", {}), str(assessment_id): resolved,
     }
     session.flush()
 

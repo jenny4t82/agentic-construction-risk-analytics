@@ -1,5 +1,81 @@
 # PROJECT HANDOVER CONTEXT
 
+## Phase 8.1A current update — 2026-11-09
+
+Multi-Pending follow-up: analysis now keeps the persisted observation card and
+evidence mounted across completion, automatically focuses the next Pending form,
+retains confirmed scores/drafts, and withholds the final decision until no current
+findings remain Pending. A session-scoped observation ID restores analysis from
+backend data after refresh; history deep links also recover remaining work.
+History completion refreshes in the background. Client submission guards complement
+existing backend conflict/duplicate protection. No scoring/alert/backend production
+changes. Recorded context still cannot be replaced through completion: use the
+existing Edit Context workflow for corrections. 59 isolated backend tests and
+build/typecheck/lint pass (seven existing warnings). Isolated browser fixture
+verified sequential completion/reload/draft and evidence retention; real #50/#51
+were inspected read-only and all 26 observations / 13 alerts stayed unchanged.
+
+Latest Phase 8.1C correction update (2026-11-09): all four UI fixes are implemented.
+Shared modal focus containment/inert background handling supports image previews
+and mobile navigation; desktop sidebar behavior is retained. Deep links validate
+assessment membership, report missing/mismatched targets, and offer return to
+history. Off-page targets occupy a separately labeled section outside the
+unchanged paginated results; hash removal clears supplemental/expanded state and
+obsolete asynchronous lookups are ignored. Historical assessment targets render
+the exact assessment without exposing historical edit controls.
+58 isolated backend tests and frontend build/typecheck pass; lint passes with
+seven existing warnings, and diff whitespace checks pass. Final authenticated
+post-fix checks now pass: both evidence variants and keyboard focus lifecycle,
+mobile/tablet navigation, valid/missing/mismatched links, clearing/Back/Forward,
+pagination and duplication, all risk filters, thumbnails and desktop sidebar.
+Current baseline is 26 observations (one Pending) and 13 alerts; full query and
+alert responses matched before/after. Phase 8.1A/B/C is ready for a Git checkpoint,
+subject to the documented coverage limits. No saved records or Git history changed.
+See the latest status in [verification](docs/phase-8-1c-verification.md).
+
+Previous Phase 8.1C verification update (2026-11-09): **connected pass completed with four
+confirmed frontend defects**. Authentication was restored; 25 observations and
+13 alerts were independently checked read-only and remained unchanged. Filters,
+search, area/dates, sorting, pagination, image previews, valid off-page deep links,
+sidebar controls and sampled responsive geometry passed. Image-modal keyboard
+handling, mobile hidden-menu focus/Escape, silent invalid assessment links and
+stale pinned observations remain defective. 58 isolated tests, build/typecheck
+and lint pass (seven existing warnings). Non-empty Pending and review-required
+live states are absent and remain unverified; their logic has isolated coverage.
+No production code or saved data changed. Fix/recheck the four findings before a
+clean A/B/C checkpoint; see the [final matrix](docs/phase-8-1c-verification.md).
+
+Development remains on `revamp/milestone-2`; the initial working tree was clean.
+The preserved baseline branch/tag were not modified, and no staging, commits or
+other Git mutations were performed. See the authoritative
+[assessment API and Antigravity contract](docs/phase-8-1a-assessment-contracts.md).
+
+New authenticated `/observation-query` supports independent current-assessment
+bands/Pending, exact area and observation ID, half-open timezone-aware dates,
+stable newest/oldest ordering, pagination and full-filter-set counts. Mixed-risk
+observations retain every finding; the overall decision is not a filter proxy.
+`GET /assessments/{id}` provides effective context, revision, correction audit and
+reconciliation state. Officer/Admin `PATCH /assessments/{id}/context` corrects
+people exposed, minutes and scoring repetition using unchanged scoring/decision
+rules, an observation lock and stale-revision rejection. Corrections are atomic,
+do not rerun YOLO, and do not alter image evidence or sibling scores.
+
+Existing observation metadata stores per-assessment context, append-only
+correction history and pre-correction alert snapshots. Existing alert rows and
+lifecycle are preserved. Alert APIs distinguish historical assessment from
+`current_assessment` and expose `review_required`. Eligible new alerts use the
+existing policy and deduplication; pending siblings still defer new alerts.
+Review flags are intentionally sticky pending a separately designed review flow.
+
+Frontend types/client helpers, a minimal context editor/audit view, alert review
+notice and `#incidents?observation_id=...&assessment_id=...` navigation are present.
+Filter parameters survive in the link for the future UI; existing aliases work.
+No visual redesign was started. Full-filter aggregation currently runs in memory;
+PostgreSQL concurrency and connected-browser verification remain limitations.
+Validation: backend 209 tests run, nine PostgreSQL skips; eight focused tests
+passed; frontend build/typecheck passed, lint passed with six existing warnings.
+See the [progress log](docs/milestone-2-progress-log.md) for details.
+
 **Agentic AI for Safety Monitoring with Construction Risk Analytics**
 
 > [!NOTE]

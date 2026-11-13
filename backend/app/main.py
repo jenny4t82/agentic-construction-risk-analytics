@@ -56,6 +56,8 @@ from .reporting import available_work_areas, get_safety_report
 from .report_pdf import render_safety_report_pdf
 from .safety_agent import assess_safety, decide_alert, detect_objects, load_model
 from .safety_graph import run_safety_graph
+from .assessment_context import assessment_state, correct_assessment, find_assessment
+from .assessment_queries import query_observations, summarize
 
 
 class ObservationRequest(BaseModel):
@@ -219,6 +221,9 @@ class AlertAssessmentSummary(BaseModel):
 
 
 class AlertDetailResponse(BaseModel):
+    review_required: bool = False
+    reconciliation_reason: Optional[str] = None
+    current_assessment: Optional[AlertAssessmentSummary] = None
     alert_id: int
     observation_id: str
     detected_hazard_id: Optional[int] = None
@@ -438,6 +443,11 @@ def _alert_response(alert: Alert) -> AlertDetailResponse:
 
     violation = alert.detected_hazard
     assessment = alert.assessment
+    current_assessment = max(violation.assessments, key=lambda item: item.assessment_version,
+                             default=assessment) if violation is not None else assessment
+    metadata = observation.raw_metadata or {}
+    snapshot = metadata.get("alert_correction_snapshots", {}).get(str(alert.alert_id))
+    reconciliation = metadata.get("assessment_reconciliation", {}).get(str(alert.assessment_id), {})
     finding_decision = (
         (violation.evidence or {}).get("finding_decision")
         if violation is not None and isinstance(violation.evidence, dict)
@@ -445,7 +455,12 @@ def _alert_response(alert: Alert) -> AlertDetailResponse:
     )
     if not isinstance(finding_decision, dict):
         finding_decision = {}
+    if snapshot:
+        finding_decision = snapshot["decision"]
     return AlertDetailResponse(
+        review_required=bool(snapshot) or reconciliation.get("review_required", False),
+        reconciliation_reason=("Assessment corrected; historical alert retained for explicit review" if snapshot else reconciliation.get("reason")),
+        current_assessment=AlertAssessmentSummary.model_validate(current_assessment, from_attributes=True) if current_assessment else None,
         alert_id=alert.alert_id,
         observation_id=alert.observation_id,
         detected_hazard_id=alert.detected_hazard_id,
@@ -485,7 +500,7 @@ def _alert_response(alert: Alert) -> AlertDetailResponse:
             else None
         ),
         assessment=(
-            AlertAssessmentSummary(
+            AlertAssessmentSummary(**snapshot["assessment"]) if snapshot else AlertAssessmentSummary(
                 assessment_id=assessment.assessment_id,
                 status=assessment.status,
                 risk_score=assessment.risk_score,
@@ -974,9 +989,9 @@ def create_assessments(
             raise HTTPException(status_code=409, detail=str(err)) from err
         except SQLAlchemyError as err:
             logger.error(
-                "Database persistence failed for observation %s: %s",
+                "Database persistence failed for observation %s (%s)",
                 request.observation_id,
-                err,
+                type(err).__name__,
             )
             raise HTTPException(
                 status_code=500, detail="Database persistence failed"
@@ -1290,7 +1305,7 @@ async def create_image_assessments(
         try:
             existing = db.get(Observation, resolved_obs_id)
         except SQLAlchemyError as err:
-            logger.error("Duplicate lookup failed for image observation %s: %s", resolved_obs_id, err)
+            logger.error("Duplicate lookup failed for image observation %s (%s)", resolved_obs_id, type(err).__name__)
             raise HTTPException(status_code=500, detail="Database lookup failed") from err
         if existing is not None:
             raise _image_submission_conflict(existing, fingerprint, submission_context)
@@ -1384,10 +1399,10 @@ async def create_image_assessments(
             existing = db.get(Observation, resolved_obs_id)
             if existing is not None:
                 raise _image_submission_conflict(existing, fingerprint, submission_context) from err
-            logger.error("Image observation integrity failure for %s: %s", resolved_obs_id, err)
+            logger.error("Image observation integrity failure for %s (%s)", resolved_obs_id, type(err).__name__)
             raise HTTPException(status_code=500, detail="Database persistence failed") from err
         except SQLAlchemyError as err:
-            logger.error("Database persistence failed for image observation %s: %s", resolved_obs_id, err)
+            logger.error("Database persistence failed for image observation %s (%s)", resolved_obs_id, type(err).__name__)
             raise HTTPException(status_code=500, detail="Database persistence failed") from err
 
         try:
@@ -1409,9 +1424,9 @@ async def create_image_assessments(
             db.flush()
         except SQLAlchemyError as err:
             logger.error(
-                "Database persistence failed for image observation %s: %s",
+                "Database persistence failed for image observation %s (%s)",
                 resolved_obs_id,
-                err,
+                type(err).__name__,
             )
             raise HTTPException(
                 status_code=500, detail="Database persistence failed"
@@ -1433,6 +1448,105 @@ async def create_image_assessments(
     )
 
 
+class AssessmentContextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=0, strict=True)
+    people_count: int = Field(ge=1, strict=True)
+    duration_minutes: int = Field(ge=1, strict=True)
+    repeated_count: int = Field(ge=0, strict=True)
+
+
+class AssessmentContextResponse(BaseModel):
+    observation_id: str
+    detected_hazard_id: int
+    assessment_id: int
+    revision: int
+    context: dict[str, Optional[int]]
+    assessment: PersistedAssessmentResponse
+    safety_decision: SafetyDecisionResponse
+    audit_history: list[dict[str, Any]]
+    reconciliation: dict[str, Any]
+
+
+class ObservationQueryItem(ObservationDetailResponse):
+    assessment_counts: dict[str, int]
+
+
+class ObservationQueryResponse(BaseModel):
+    items: list[ObservationQueryItem]
+    total: int
+    limit: int
+    offset: int
+    assessment_counts: dict[str, int]
+    observation_counts: dict[str, int]
+    unfiltered_risk_total: int
+
+
+@app.get("/assessments/{assessment_id}", response_model=AssessmentContextResponse, dependencies=[Depends(get_current_user)])
+def get_assessment_context(assessment_id: int, db: Optional[Session] = Depends(get_db)):
+    if db is None:
+        raise HTTPException(503, "Database is not configured")
+    try:
+        return assessment_state(*find_assessment(db, assessment_id))
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+    except SQLAlchemyError as error:
+        raise HTTPException(500, "Failed to query assessment") from error
+
+
+@app.patch("/assessments/{assessment_id}/context", response_model=AssessmentContextResponse)
+def update_assessment_context(assessment_id: int, request: AssessmentContextRequest,
+                              actor: UserAccount = Depends(require_safety_manager),
+                              db: Optional[Session] = Depends(get_db)):
+    if db is None:
+        raise HTTPException(503, "Database is not configured")
+    try:
+        result = correct_assessment(db, assessment_id, expected_revision=request.expected_revision,
+            actor_id=actor.user_id, values=request.model_dump(exclude={"expected_revision"}))
+        response = AssessmentContextResponse.model_validate(result)
+        db.commit()
+        return response
+    except LookupError as error:
+        db.rollback()
+        raise HTTPException(404, str(error)) from error
+    except AssessmentCompletionConflict as error:
+        db.rollback()
+        raise HTTPException(409, {"code": error.code, "message": str(error)}) from error
+    except ValueError as error:
+        db.rollback()
+        raise HTTPException(422, str(error)) from error
+    except SQLAlchemyError as error:
+        db.rollback()
+        raise HTTPException(500, "Assessment correction failed") from error
+
+
+@app.get("/observation-query", response_model=ObservationQueryResponse, dependencies=[Depends(get_current_user)])
+def search_observations(
+    risk: Literal["All", "Pending", "Low", "Moderate", "High", "Critical"] = "All",
+    work_area: Optional[str] = None, start: Optional[datetime] = None,
+    end: Optional[datetime] = None, observation_id: Optional[str] = None,
+    sort: Literal["newest", "oldest"] = "newest",
+    limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+    db: Optional[Session] = Depends(get_db),
+):
+    for value in (start, end):
+        if value is not None and value.utcoffset() is None:
+            raise HTTPException(422, "Date filters require a timezone")
+    if start is not None and end is not None and start >= end:
+        raise HTTPException(422, "start must precede end")
+    if db is None:
+        raise HTTPException(503, "Database is not configured")
+    try:
+        result = query_observations(db, risk=risk, work_area=work_area, start=start,
+            end=end, observation_id=observation_id, sort=sort, limit=limit, offset=offset)
+        result["items"] = [ObservationQueryItem(
+            **ObservationDetailResponse.model_validate(item).model_dump(),
+            assessment_counts=summarize(item)) for item in result["items"]]
+        return result
+    except SQLAlchemyError as error:
+        raise HTTPException(500, "Failed to query observations") from error
+
+
 @app.get("/observations", response_model=list[ObservationDetailResponse], dependencies=[Depends(get_current_user)])
 def get_observations(
     limit: int = Query(default=20, ge=1, le=100),
@@ -1452,7 +1566,7 @@ def get_observations(
             for rec in records
         ]
     except SQLAlchemyError as err:
-        logger.error("Failed to query observations from database: %s", err)
+        logger.error("Failed to query observations from database (%s)", type(err).__name__)
         raise HTTPException(
             status_code=500, detail="Failed to query observations from database"
         ) from err
@@ -1473,9 +1587,9 @@ def get_observation(
         record = get_observation_record(db, observation_id=observation_id)
     except SQLAlchemyError as err:
         logger.error(
-            "Failed to query observation %s from database: %s",
+            "Failed to query observation %s from database (%s)",
             observation_id,
-            err,
+            type(err).__name__,
         )
         raise HTTPException(
             status_code=500, detail="Failed to query observation from database"
@@ -1545,7 +1659,7 @@ def get_observation_image(
     try:
         record = get_observation_record(db, observation_id=observation_id)
     except SQLAlchemyError as err:
-        logger.error("Failed to query image metadata for observation %s: %s", observation_id, err)
+        logger.error("Failed to query image metadata for observation %s (%s)", observation_id, type(err).__name__)
         raise HTTPException(
             status_code=500, detail="Failed to query observation from database"
         ) from err

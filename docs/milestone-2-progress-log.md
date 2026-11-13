@@ -3,11 +3,11 @@
 ## Current snapshot
 
 - **Current milestone:** Safety Intelligence & Worker Protection (mentor-defined Weeks 3-4).
-- **Current phase:** Phase 7A adds post-upload work-area correction and authenticated filtered Safety Reports with PDF export. Its four connected-verification observations and owned images were subsequently removed from `safesite_local`; the normal local application now has zero safety records and retains three active local users. `safesite_demo` remains an untouched fallback. The notification policy remains provisional; no dataset remediation/merge or model training has started.
+- **Current phase:** Phase 8.1A assessment queries, safe context correction, audit and alert reconciliation implemented on `revamp/milestone-2`; see the [API contract](phase-8-1a-assessment-contracts.md). Phase 8 baseline remains preserved. No local/demo data, model weights or scoring policy changed.
 - **Overall status:** In progress. Local prototype and evaluation evidence exist; construction-safety readiness and required end-to-end deliverables remain incomplete.
-- **Last updated:** 2026-11-06.
+- **Last updated:** 2026-11-09.
 - **Current blockers:** Supplementary image/photo rights and license scope; scene-family overlap across supplementary train and the frozen existing test set; ten orphan label pairings; `no_gloves` task/policy semantics; human approval of any future class map and split plan; source access/codebooks for candidate datasets.
-- **Next planned task:** Continue normal image submissions using the [local application setup](./local-setup.md), obtain mentor review of provisional notification thresholds, and prioritize model/dataset remediation. The [mentor-demo checklist](./local-mentor-demo.md) remains an optional fallback; durable Site/Zone/Inspection identity remains separate work.
+- **Next planned task:** Review the Phase 8.1A contracts and verification limits, then issue Antigravity a separate UI task. Disposable PostgreSQL concurrency and connected-browser checks remain outstanding; visual redesign has not started. Policy/model review remains separate.
 
 This log records implementation evidence, not aspirations. A mentioned feature is not marked complete without repository evidence. No separate mentor slide deck or Milestone 2 requirements document was found in the repository search; the expectations below are transcribed from the project brief supplied for this phase.
 
@@ -265,3 +265,143 @@ recorded the [baseline](milestone-2-baseline.md) and
 `.venv-yolo` (199 run, nine skipped); ten focused bootstrap tests passed; frontend
 build passed and lint retained six warnings. No local data or scoring policy
 changed. Future redesign work belongs on the separate revamp branch.
+
+## Phase 8.1A assessment usability — 2026-11-09
+
+Initial verification: `revamp/milestone-2`, clean working tree. Baseline branch
+and tag untouched; no staging, commit, push, reset, stash, rebase or merge.
+
+- Added authenticated `/observation-query`: exact work area/ID, timezone-aware
+  half-open date range, stable sort, pagination and backend counts across the
+  complete filtered set. Risk/Pending match any current hazard assessment;
+  mixed-risk observations retain all siblings. Facet counts ignore risk/page.
+- Added assessment detail/context/audit lookup and Officer/Admin context PATCH.
+  People exposed, duration and scoring repetition are assessment-specific
+  operator context. Existing scoring, severity, bands and shared policy are
+  reused; evidence and sibling scores remain intact.
+- Observation locking, expected revision, same-context no-op and transactional
+  rollback protect corrections. Manual alert creation shares the lock. Existing
+  metadata holds context/audits; no database migration or new audit subsystem.
+- Existing alerts retain lifecycle, risk and pre-correction snapshots. APIs/UI
+  explicitly distinguish current risk and review-required history. Newly eligible
+  alerts follow policy/deduplication; pending siblings still defer creation.
+  Review flags have no automatic clear/reopen behavior in this phase.
+- Added typed frontend clients, minimal editor/audit display, alert review notice,
+  and target observation/assessment hash links. Existing links remain compatible.
+  Filter context is retained for the later UI. No visual redesign.
+- Validation: full backend **209 run, 200 passed, nine PostgreSQL skips**; eight
+  focused tests pass on isolated SQLite ORM data. Coverage includes all risk
+  bands, mixed/Pending counts, latest versions, dates/area, sort/page, lookup,
+  valid/invalid edits, RBAC/authentication, recalculation, stale/no-op retries,
+  sibling isolation, audit, alert preservation/deduplication and rollback.
+  Frontend build/typecheck pass; lint exits 0 with six pre-existing warnings.
+  `git diff --check` passes with line-ending notices only. The suite emitted
+  nonfatal asset-network warnings and an existing Alembic deprecation warning.
+  Database errors now log exception class rather than connection/error contents.
+- Limits: full-filter aggregation is in memory; SQLite cannot validate PostgreSQL
+  row-lock concurrency. No connected-browser check, review-clear workflow, or
+  login deep-link restoration. Local/demo databases were not integration targets.
+
+Exact request/response structures, filter semantics, metadata keys, reconciliation
+rules and Antigravity guidance: [Phase 8.1A contract](phase-8-1a-assessment-contracts.md).
+
+## Phase 8.1C partial verification — 2026-11-09
+
+The user reports 25 observations, thumbnails, risk counts and pagination after
+the proxy fix. The shared integrated browser remains at login and redirects
+`#incidents` back to login. Connected verification is pending access to the
+authenticated page; [the matrix](phase-8-1c-verification.md) separates isolated
+test results, user-reported evidence and outstanding live checks.
+
+58 focused backend tests passed with application database URLs disabled. Added
+isolated repeated-correction coverage across all alert lifecycle states, including
+original snapshots, audit growth, stale requests and duplicate prevention.
+Build/typecheck passed; lint passed with seven existing warnings; diff check
+passed. No production code or saved records/images changed, no Git mutations,
+and no 8.1D work. Phase 8.1C is incomplete; combined A/B/C checkpoint readiness
+is not yet verified. Next: authenticate/share the integrated browser and complete
+the read-only live checks.
+
+## Phase 8.1C resumed connected results — 2026-11-09
+
+Supersedes the authentication blocker above. Signed-in read-only verification is
+complete: all risk tabs, exact ID search, Zone A–D filters, date range, ordering,
+page sizes/next/previous, row expansion, original/overlay previews, valid off-page
+assessment deep link, sidebar controls on all seven pages and sampled responsive
+geometry were exercised. Counts: 25 observations, 44 completed assessments,
+Pending 0; 13 alerts (6 open, 5 resolved, 1 dismissed, 1 acknowledged). Complete
+observation/assessment metadata and alert GET responses matched before/after.
+
+Four confirmed defects remain unchanged in this read-only run: image dialog
+focus/Escape, mobile closed-menu off-screen keyboard focus/Escape, silent invalid
+assessment links, and pinned observation left behind when clearing a deep link
+(21 rows at page size 20). Non-empty Pending and review-required alert displays
+cannot be exercised with existing records; isolated tests cover their behavior.
+
+58 focused tests rerun successfully; frontend build/typecheck passes, lint exits
+0 with seven existing warnings, diff check passes. No saved data, images, source
+implementation or Git state mutations; no 8.1D. Verification is complete with
+findings; fix/recheck these defects before a clean checkpoint. See the
+[final verification matrix](phase-8-1c-verification.md).
+
+### Phase 8.1C four-defect corrections — 2026-11-09
+
+Implemented image-dialog and mobile-navigation keyboard focus containment,
+Escape/restoration and inert backgrounds. Added deep-link assessment membership
+validation and return-to-history; cleared supplemental state on hash changes with
+stale-response protection. Off-page linked details are separated from backend
+pagination, avoiding duplicate rows or a 21-row page. Historical targets display
+their exact assessment without historical edit controls.
+
+58 isolated backend tests and frontend build/typecheck pass; lint passes with
+seven existing warnings and `git diff --check` passes. Post-fix connected
+verification remains pending because the shared browser is signed out; sign-in
+was requested. Earlier connected successes must not be treated as post-fix
+results. A verified A/B/C checkpoint is not yet recommended. All existing work
+preserved; no saved records, scoring, alerts, schema or Git history modified.
+
+### Phase 8.1C final authenticated sign-off — 2026-11-09
+
+All four post-fix browser checks passed. Original/annotated modal focus,
+Escape/trapping/restoration; mobile/tablet inert navigation and focus lifecycle;
+valid/missing/mismatched deep links; supplemental-state cleanup and Back/Forward;
+pagination limits/uniqueness; all risk tabs, thumbnails and desktop sidebar were
+verified. Current baseline: 26 observations, one Pending assessment, 13 alerts.
+Full observation-query and alert responses matched before/after testing.
+
+No implementation regression required a change. Only verification documentation
+changed in this pass; prior build/typecheck, lint and 58 isolated backend test
+results remain applicable. Diff whitespace check rerun. Combined A/B/C is ready
+for a Git checkpoint with the limitations in the [final matrix](phase-8-1c-verification.md).
+Nothing staged or committed; no saved data changes or Phase 8.1D work.
+
+### Phase 8.1 Multi-Pending assessment follow-up
+
+Kept persisted analysis results/evidence mounted after the first completion;
+added confirmed-response retention, next-form focus, completion progress, final
+decision gating, refresh recovery by persisted observation ID, and immediate
+duplicate-submission guards. History completion refresh is now background-only.
+Recorded-context conflict rules and existing correction workflow are unchanged.
+
+59 isolated backend tests pass, including a new two-Pending score/recovery/audit/
+duplicate regression. An intercepted browser fixture verified sequential forms,
+draft/evidence retention, reload and double-submit prevention. Connected checks
+were read-only: reference #50 remains High (60), #51 remains Pending; 26
+observations and 13 alerts match before/after. Build/typecheck and lint pass with
+seven existing warnings. See the [verification details](phase-8-1c-verification.md).
+No scoring/alert policy change, live writes, Phase 8.1D, staging or commits.
+
+### Phase 8.1 Git checkpoint validation — 2026-11-09
+
+User authorized staging, commit and normal push of Phase 8.1A/B/C and
+Multi-Pending on `revamp/milestone-2` to its existing origin upstream.
+59 isolated backend tests rerun successfully with both database URL variables
+empty; frontend build/TypeScript and lint pass (seven known warnings).
+Whitespace checks pass. Reviewed the 24 intended source/test/documentation files
+and scanned them for private keys, token patterns, literal secrets and credential
+URLs; no matches. No environment files, databases, evidence, weights, datasets,
+generated reports or caches are included. Preserved baseline branch remains
+`66a49ef91b8b46ae450cb307b4f0089706c2804e`; stable tag object remains
+`94677ccc21684aab26d078037e2bd0bd06dc917a` (same peeled baseline commit).
+No production writes, detector runs, Phase 8.1D or Phase 8.2 work in this checkpoint.
+Earlier connected verification and its documented coverage limits still apply.

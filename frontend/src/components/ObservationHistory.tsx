@@ -1,435 +1,810 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import {
-  History,
-  RotateCw,
-  Database,
-  Calendar,
-  MapPin,
+  AlertCircle,
   AlertTriangle,
-  ChevronRight,
-  ChevronDown,
+  ArrowUpDown,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  Database,
+  Filter,
+  History,
+  MapPin,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  X,
 } from 'lucide-react';
-import type { AssessmentCompletionResponse, ObservationDetailResponse, PersistedAssessmentResponse, SafetyDecisionResponse } from '../types';
-import { useAuth } from '../auth/AuthContext';
-import { PendingAssessmentCompletion } from './PendingAssessmentCompletion';
-import { SafetyDecisionPanel } from './SafetyDecisionPanel';
 import {
-  formatHazardType,
-  formatRiskBand,
-  formatConfidence,
-  formatDateTime,
-} from '../utils/formatters';
-import { fetchObservationImage, updateObservationWorkArea } from '../api/client';
+  ApiError,
+  fetchAssessmentContext,
+  fetchObservationDetail,
+  fetchReportWorkAreas,
+  queryObservations,
+} from '../api/client';
+import type {
+  AssessmentFilter,
+  ObservationDetailResponse,
+  ObservationFilters,
+  ObservationQueryResponse,
+} from '../types';
+import { incidentTarget } from '../utils/incidentNavigation';
+import { ObservationRow } from './ObservationRow';
 
-interface ObservationHistoryProps {
-  observations: ObservationDetailResponse[];
-  isLoading: boolean;
-  isDatabaseConfigured: boolean;
-  error: string | null;
-  onRefresh: () => void;
-  onAssessmentCompleted: (observationId: string) => void;
-  onWorkAreaUpdated: (observation: ObservationDetailResponse) => void;
+interface Props {
+  onNavigate?: (section: 'overview' | 'incidents' | 'alerts' | 'zones' | 'recurrence' | 'analysis' | 'reports') => void;
+  onRefresh?: () => void;
+  onAssessmentCompleted?: (observationId: string) => void;
+  onWorkAreaUpdated?: (observation: ObservationDetailResponse) => void;
+  // Backward compatibility props:
+  observations?: ObservationDetailResponse[];
+  isLoading?: boolean;
+  isDatabaseConfigured?: boolean;
+  error?: string | null;
 }
 
-// Older observations may have no stored decision snapshot. Validate metadata before rendering it.
-const storedDecision = (metadata: Record<string, unknown> | null | undefined): SafetyDecisionResponse | null => {
-  const value = metadata?.safety_decision;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const decision = value as Record<string, unknown>;
-  if (!['alert', 'warning', 'pending', 'no_alert'].includes(String(decision.outcome)) ||
-      typeof decision.reason !== 'string' ||
-      typeof decision.priority !== 'string' ||
-      typeof decision.policy_version !== 'string' ||
-      !Array.isArray(decision.supporting_evidence) ||
-      (decision.risk_band !== null && typeof decision.risk_band !== 'string')) return null;
-  const validEvidence = decision.supporting_evidence.every((item: unknown) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
-    const evidence = item as Record<string, unknown>;
-    return typeof evidence.hazard_type === 'string' &&
-      typeof evidence.source_label === 'string' &&
-      (evidence.detection_confidence == null || typeof evidence.detection_confidence === 'number') &&
-      (evidence.risk_score == null || typeof evidence.risk_score === 'number') &&
-      (evidence.risk_band == null || typeof evidence.risk_band === 'string');
-  });
-  return validEvidence ? value as SafetyDecisionResponse : null;
-};
+const RISK_TABS: { id: AssessmentFilter; label: string }[] = [
+  { id: 'All', label: 'All' },
+  { id: 'Pending', label: 'Pending' },
+  { id: 'Critical', label: 'Critical' },
+  { id: 'High', label: 'High' },
+  { id: 'Moderate', label: 'Moderate' },
+  { id: 'Low', label: 'Low' },
+];
 
-const latestAssessment = (assessments: PersistedAssessmentResponse[]): PersistedAssessmentResponse | undefined =>
-  assessments.reduce<PersistedAssessmentResponse | undefined>(
-    (latest, item) => !latest || item.assessment_version > latest.assessment_version ? item : latest,
-    undefined,
-  );
+export function ObservationHistory({
+  onNavigate,
+  onRefresh: parentOnRefresh,
+  onAssessmentCompleted: parentOnAssessmentCompleted,
+  onWorkAreaUpdated: parentOnWorkAreaUpdated,
+}: Props) {
+  // Query Filters state
+  const [selectedRisk, setSelectedRisk] = useState<AssessmentFilter>('All');
+  const [searchId, setSearchId] = useState('');
+  const [selectedArea, setSelectedArea] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [pageOffset, setPageOffset] = useState<number>(0);
 
-const ObservationImages: React.FC<{ observationId: string }> = ({ observationId }) => {
-  const [images, setImages] = useState<{ original?: string; annotated?: string }>({});
+  // Data state
+  const [queryResult, setQueryResult] = useState<ObservationQueryResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isDbConfigured, setIsDbConfigured] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [workAreas, setWorkAreas] = useState<string[]>([]);
+  const [lastRefreshed, setLastRefreshed] = useState<Date>(() => new Date());
 
+  // Direct-link / Expand state
+  const [expandedId, setExpandedId] = useState<string | null>(() => incidentTarget().observationId);
+  const [targetAssessmentId, setTargetAssessmentId] = useState<string | null>(() => incidentTarget().assessmentId);
+  const [directLinkObs, setDirectLinkObs] = useState<ObservationDetailResponse | null>(null);
+  const [directLinkError, setDirectLinkError] = useState<string | null>(null);
+
+  const searchInputId = useId();
+  const workAreaSelectId = useId();
+  const startDateInputId = useId();
+  const endDateInputId = useId();
+  const sortSelectId = useId();
+
+  // Load available work areas
   useEffect(() => {
     let active = true;
-    const urls: string[] = [];
-    const load = async (variant: 'original' | 'annotated') => {
-      try {
-        const url = await fetchObservationImage(observationId, variant);
-        urls.push(url);
-        if (active) setImages((current) => ({ ...current, [variant]: url }));
-        else URL.revokeObjectURL(url);
-      } catch {
-        // Missing image variants are expected for older persisted records.
+    void fetchReportWorkAreas()
+      .then((areas) => {
+        if (active) setWorkAreas(areas);
+      })
+      .catch(() => {
+        // Fallback silently if unavailable
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Main data query function
+  const executeQuery = useCallback(async (background = false) => {
+    if (!background) setIsLoading(true);
+    setErrorMessage(null);
+
+    const apiFilters: ObservationFilters = {
+      risk: selectedRisk,
+      sort: sortOrder,
+      limit: pageSize,
+      offset: pageOffset,
+    };
+
+    if (searchId.trim()) {
+      apiFilters.observation_id = searchId.trim();
+    }
+    if (selectedArea.trim()) {
+      apiFilters.work_area = selectedArea.trim();
+    }
+    if (startDate) {
+      // Backend requires timezone-bearing ISO datetime string
+      apiFilters.start = new Date(startDate).toISOString();
+    }
+    if (endDate) {
+      apiFilters.end = new Date(endDate).toISOString();
+    }
+
+    try {
+      const res = await queryObservations(apiFilters);
+      setQueryResult(res);
+      setIsDbConfigured(true);
+      setLastRefreshed(new Date());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to query safety incidents';
+      if (msg.includes('503') || msg.toLowerCase().includes('database is not configured')) {
+        setIsDbConfigured(false);
+      } else {
+        setErrorMessage(msg);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedRisk, searchId, selectedArea, startDate, endDate, sortOrder, pageSize, pageOffset]);
+
+  // Load data on filter change
+  useEffect(() => {
+    void executeQuery();
+  }, [executeQuery]);
+
+  // Handle direct-link navigation from hash (#incidents?observation_id=...&assessment_id=...)
+  useEffect(() => {
+    let generation = 0;
+    const handleHash = async () => {
+      const request = ++generation;
+      const target = incidentTarget();
+      setDirectLinkObs(null);
+      setDirectLinkError(null);
+      setExpandedId(null);
+      setTargetAssessmentId(null);
+      if (target.observationId) {
+          try {
+            const obs = await fetchObservationDetail(target.observationId);
+            if (request !== generation) return;
+            setDirectLinkObs(obs);
+            setExpandedId(target.observationId);
+            if (target.assessmentId) {
+              const belongs = obs.detected_hazards.some(h => h.assessments.some(a => String(a.assessment_id) === target.assessmentId));
+              if (!belongs) {
+                if (!/^[1-9]\d*$/.test(target.assessmentId)) throw new Error(`Assessment "${target.assessmentId}" was not found.`);
+                try {
+                  await fetchAssessmentContext(Number(target.assessmentId));
+                } catch (err) {
+                  if (err instanceof ApiError && err.status === 404) throw new Error(`Assessment "${target.assessmentId}" was not found.`);
+                  throw err;
+                }
+                throw new Error(`Assessment "${target.assessmentId}" belongs to another observation and cannot be focused here.`);
+              }
+              setTargetAssessmentId(target.assessmentId);
+            }
+          } catch (err) {
+            if (request !== generation) return;
+            setDirectLinkError(
+              `Direct-link observation "${target.observationId}" could not be loaded: ${
+                err instanceof Error ? err.message : 'Not found'
+              }`
+            );
+          }
+      } else if (target.assessmentId) {
+        setDirectLinkError('An observation ID is required to open this assessment.');
       }
     };
-    void load('original'); void load('annotated');
-    return () => { active = false; urls.forEach((url) => URL.revokeObjectURL(url)); };
-  }, [observationId]);
 
-  return (
-    <div>
-      <h5 className="font-bold text-slate-700 mb-2 uppercase tracking-wider text-[11px]">
-        Observation Images
-      </h5>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {images.original && (
-          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-            <div className="px-3 py-2 text-xs font-semibold text-slate-600">Original upload</div>
-            <img
-              src={images.original}
-              alt={`Original image for observation ${observationId}`}
-              className="w-full h-auto object-contain bg-slate-900"
-            />
-          </div>
-        )}
-        {images.annotated && (
-          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-            <div className="px-3 py-2 text-xs font-semibold text-slate-600">
-              Detection overlay
-            </div>
-            <img
-              src={images.annotated}
-              alt={`Annotated image for observation ${observationId}`}
-              className="w-full h-auto object-contain bg-slate-900"
-            />
-          </div>
-        )}
-      </div>
-      {!images.original && !images.annotated && (
-        <p className="text-slate-400 italic">Image unavailable for this observation.</p>
-      )}
-    </div>
-  );
-};
+    void handleHash();
+    window.addEventListener('hashchange', handleHash);
+    return () => { generation++; window.removeEventListener('hashchange', handleHash); };
+  }, []);
 
-export const ObservationHistory: React.FC<ObservationHistoryProps> = ({
-  observations,
-  isLoading,
-  isDatabaseConfigured,
-  error,
-  onRefresh,
-  onAssessmentCompleted,
-  onWorkAreaUpdated,
-}) => {
-  const { user } = useAuth();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [lastCompletion, setLastCompletion] = useState<AssessmentCompletionResponse | null>(null);
-  const [editingAreaId, setEditingAreaId] = useState<string | null>(null);
-  const [areaDraft, setAreaDraft] = useState('');
-  const [areaError, setAreaError] = useState<string | null>(null);
-  const [areaSavedId, setAreaSavedId] = useState<string | null>(null);
-  const [areaSaving, setAreaSaving] = useState(false);
-  const canComplete = user?.role === 'safety_officer' || user?.role === 'admin';
+  const returnToHistory = () => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '');
+    params.delete('observation_id');
+    params.delete('assessment_id');
+    window.location.hash = `incidents${params.size ? `?${params}` : ''}`;
+  };
 
+  // Scroll to and highlight targeted assessment once expanded
+  useEffect(() => {
+    if (targetAssessmentId && expandedId) {
+      const timer = setTimeout(() => {
+        const el = document.getElementById(`assessment-${targetAssessmentId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.focus();
+        }
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [targetAssessmentId, expandedId, queryResult, directLinkObs]);
+
+  // Clear all filters
+  const clearFilters = () => {
+    setSelectedRisk('All');
+    setSearchId('');
+    setSelectedArea('');
+    setStartDate('');
+    setEndDate('');
+    setSortOrder('newest');
+    setPageOffset(0);
+  };
+
+  const hasActiveFilters =
+    selectedRisk !== 'All' ||
+    searchId.trim() !== '' ||
+    selectedArea !== '' ||
+    startDate !== '' ||
+    endDate !== '' ||
+    sortOrder !== 'newest';
+
+  // Toggle item expansion
   const toggleExpand = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
   };
 
-  const saveArea = async (observationId: string) => {
-    if (!areaDraft.trim()) { setAreaError('Enter a named work area.'); return; }
-    setAreaSaving(true); setAreaError(null);
-    try {
-      const updated = await updateObservationWorkArea(observationId, areaDraft.trim());
-      onWorkAreaUpdated(updated);
-      setEditingAreaId(null);
-      setAreaSavedId(observationId);
-    } catch (reason) {
-      setAreaError(reason instanceof Error ? reason.message : 'Unable to update work area');
-    } finally { setAreaSaving(false); }
+  // Handle successful assessment update / completion
+  const handleAssessmentUpdated = (observationId: string) => {
+    void executeQuery(true);
+    if (directLinkObs?.observation_id === observationId) {
+      void fetchObservationDetail(observationId).then(setDirectLinkObs).catch(() => {
+        setDirectLinkError('Assessment saved; refresh to reload the linked observation.');
+      });
+    }
+    parentOnAssessmentCompleted?.(observationId);
   };
 
+  // Handle work area update
+  const handleWorkAreaUpdated = (updated: ObservationDetailResponse) => {
+    setQueryResult((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        items: current.items.map((item) =>
+          item.observation_id === updated.observation_id
+            ? { ...item, ...updated }
+            : item
+        ),
+      };
+    });
+    if (directLinkObs?.observation_id === updated.observation_id) {
+      setDirectLinkObs(updated);
+    }
+    parentOnWorkAreaUpdated?.(updated);
+  };
+
+  // Compile list of displayed items
+  const displayItems = queryResult?.items ?? [];
+  const supplemental = directLinkObs && !displayItems.some(item => item.observation_id === directLinkObs.observation_id);
+
+  // Calculate metrics derived from real backend API counts
+  const totalObservations = queryResult?.unfiltered_risk_total ?? 0;
+  const pendingAssessments = queryResult?.assessment_counts?.Pending ?? 0;
+  const highCriticalFindings =
+    (queryResult?.assessment_counts?.High ?? 0) + (queryResult?.assessment_counts?.Critical ?? 0);
+  const completedAssessments =
+    (queryResult?.assessment_counts?.Low ?? 0) +
+    (queryResult?.assessment_counts?.Moderate ?? 0) +
+    (queryResult?.assessment_counts?.High ?? 0) +
+    (queryResult?.assessment_counts?.Critical ?? 0);
+
+  // Pagination calculation
+  const totalMatching = queryResult?.total ?? 0;
+  const currentStart = totalMatching === 0 ? 0 : pageOffset + 1;
+  const currentEnd = Math.min(pageOffset + pageSize, totalMatching);
+  const totalPages = Math.ceil(totalMatching / pageSize);
+  const currentPage = Math.floor(pageOffset / pageSize) + 1;
+
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden mb-8">
-      {/* Header */}
-      <div className="p-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-4">
+    <div className="space-y-6">
+      {/* 1. Page Header with Claude-like Polish */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-1">
         <div>
-          <h2 className="text-lg font-bold text-slate-900 flex items-center space-x-2">
-            <History className="w-5 h-5 text-slate-700" />
-            <span>Site Observation History</span>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-teal-600 animate-pulse" />
+            <p className="text-xs font-bold uppercase tracking-[.18em] text-teal-700">
+              Investigation Workspace
+            </p>
+          </div>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 mt-1">
+            Safety Incidents
           </h2>
-          <p className="text-sm text-slate-500">
-            Persistent audit trail of site observations, detections, and risk calculations.
+          <p className="text-sm text-slate-500 mt-1.5 max-w-2xl leading-relaxed">
+            Investigate observations, review PPE findings, and manage assessments.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={isLoading}
-          className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 transition-colors"
-        >
-          <RotateCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          <span>Refresh</span>
-        </button>
-      </div>
-
-      <div className="p-6">
-        {/* State 1: Database Unconfigured (503) */}
-        {!isDatabaseConfigured && !isLoading && (
-          <div className="p-5 rounded-xl bg-slate-50 border border-slate-200 flex items-start space-x-3 text-slate-600">
-            <Database className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
-            <div className="text-sm">
-              <h4 className="font-semibold text-slate-800">Observation history unavailable</h4>
-              <p className="text-slate-500 mt-1">Saved records cannot be loaded right now. Check the backend and database connection, then refresh.</p>
-            </div>
-          </div>
-        )}
-
-        {/* State 2: Error State */}
-        {isDatabaseConfigured && error && (
-          <div className="p-5 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-start justify-between">
-            <div className="flex items-start space-x-3">
-              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-              <div>
-                <h4 className="font-semibold text-red-800">Failed to Retrieve History</h4>
-                <p className="text-sm text-red-600 mt-0.5">{error}</p>
-              </div>
-            </div>
+        {/* Quick Actions */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onNavigate ? (
             <button
-              onClick={onRefresh}
-              className="text-xs font-semibold px-3 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded transition-colors"
+              type="button"
+              onClick={() => onNavigate('analysis')}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs sm:text-sm font-semibold transition-colors shadow-xs"
             >
-              Retry
+              <Sparkles size={16} />
+              <span>Analyze Another Image</span>
             </button>
-          </div>
-        )}
+          ) : (
+            <a
+              href="#analysis"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs sm:text-sm font-semibold transition-colors shadow-xs"
+            >
+              <Sparkles size={16} />
+              <span>Analyze Another Image</span>
+            </a>
+          )}
 
-        {/* State 3: Loading Skeleton */}
-        {isDatabaseConfigured && isLoading && (
-          <div className="space-y-3">
-            {[1, 2, 3].map((n) => (
-              <div
-                key={n}
-                className="p-4 rounded-xl border border-slate-100 bg-slate-50 animate-pulse flex items-center justify-between"
-              >
-                <div className="space-y-2">
-                  <div className="h-4 w-48 bg-slate-200 rounded" />
-                  <div className="h-3 w-32 bg-slate-200 rounded" />
-                </div>
-                <div className="h-6 w-20 bg-slate-200 rounded-full" />
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* State 4: Empty State */}
-        {isDatabaseConfigured && !isLoading && !error && observations.length === 0 && (
-          <div className="p-8 text-center rounded-xl border border-dashed border-slate-200">
-            <History className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-            <h3 className="font-semibold text-slate-700 text-sm">No Recorded Observations</h3>
-            <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-              No observations have been recorded yet. Open AI Safety Analysis to submit an image.
-            </p>
-          </div>
-        )}
-
-        {/* State 5: Observations List */}
-        {isDatabaseConfigured && !isLoading && !error && observations.length > 0 && (
-          <div className="space-y-3">
-            {observations.map((obs) => {
-              const isExpanded = expandedId === obs.observation_id;
-              const namedArea = obs.work_area?.trim() && !['unknown', 'unspecified', 'unassigned work area'].includes(obs.work_area.trim().toLowerCase()) ? obs.work_area.trim() : null;
-              const decision = storedDecision(obs.raw_metadata);
-              const hazardCount = obs.detected_hazards.length;
-              const allAssessments = obs.detected_hazards.map((h) => latestAssessment(h.assessments));
-              const hasHighOrCritical = allAssessments.some(
-                (a) => a?.risk_band === 'High' || a?.risk_band === 'Critical'
-              );
-
-              return (
-                <div
-                  key={obs.observation_id}
-                  className="rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition-all overflow-hidden"
-                >
-                  {/* Summary Row */}
-                  <div
-                    onClick={() => toggleExpand(obs.observation_id)}
-                    className="p-4 cursor-pointer flex flex-wrap items-center justify-between gap-3 select-none"
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600 font-mono text-xs font-bold">
-                        #{obs.observation_id.slice(-4)}
-                      </div>
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-900 text-sm">
-                            {obs.observation_id}
-                          </span>
-                          {hasHighOrCritical && (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700">
-                              High Risk
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center space-x-3 text-xs text-slate-400 mt-0.5">
-                          <span className="flex items-center space-x-1">
-                            <Calendar className="w-3 h-3" />
-                            <span>{formatDateTime(obs.observed_at)}</span>
-                          </span>
-                          <span className="flex items-center space-x-1">
-                            <MapPin className="w-3 h-3" />
-                            <span>{namedArea || 'Unassigned work area'}</span>
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center space-x-3">
-                      {/* Hazards count badge */}
-                      <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-slate-100 text-slate-700">
-                        {hazardCount} {hazardCount === 1 ? 'hazard' : 'hazards'}
-                      </span>
-                      {isExpanded ? (
-                        <ChevronDown className="w-4 h-4 text-slate-400" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4 text-slate-400" />
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Expandable Details Drawer */}
-                  {isExpanded && (
-                    <div className="p-4 bg-slate-50/60 border-t border-slate-100 text-xs space-y-4">
-                      <div className="rounded-lg border border-slate-200 bg-white p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-slate-800">Work Area / Zone: {namedArea || 'Unassigned work area'}</p>
-                          {canComplete && editingAreaId !== obs.observation_id && <button type="button" onClick={() => { setEditingAreaId(obs.observation_id); setAreaDraft(namedArea || ''); setAreaError(null); setAreaSavedId(null); }} className="text-sm font-semibold text-teal-700 underline">{namedArea ? 'Edit' : 'Assign work area'}</button>}
-                        </div>
-                        {areaSavedId === obs.observation_id && <p role="status" className="mt-2 text-teal-700">Work area saved. Analytics and reports will reflect this assignment on refresh.</p>}
-                        {editingAreaId === obs.observation_id && <form onSubmit={(event) => { event.preventDefault(); void saveArea(obs.observation_id); }} className="mt-3 flex flex-wrap items-end gap-2">
-                          <label className="text-xs font-semibold text-slate-700">Named work area
-                            <input autoFocus type="text" maxLength={255} value={areaDraft} onChange={(event) => setAreaDraft(event.target.value)} placeholder="e.g. Zone A" className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                          </label>
-                          <button type="submit" disabled={areaSaving || !areaDraft.trim()} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{areaSaving ? 'Saving…' : 'Save'}</button>
-                          <button type="button" onClick={() => { setEditingAreaId(null); setAreaError(null); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">Cancel</button>
-                          {areaError && <p role="alert" className="w-full text-rose-700">{areaError}</p>}
-                        </form>}
-                      </div>
-                      {/* Observation Metadata Grid */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 bg-white rounded-lg border border-slate-200">
-                        <div>
-                          <span className="text-slate-400 block">Source</span>
-                          <span className="font-medium text-slate-800 truncate block">
-                            {obs.source === 'image_upload:site_image' ? 'Uploaded image' : obs.source}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 block">People Count</span>
-                          <span className="font-medium text-slate-800">
-                            {obs.people_count ?? '—'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 block">Duration</span>
-                          <span className="font-medium text-slate-800">
-                            {obs.duration_minutes ? `${obs.duration_minutes} min` : '—'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 block">Scoring repetition input</span>
-                          <span className="font-medium text-slate-800">
-                            {obs.repeated_count ?? '—'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {decision ? (
-                        <SafetyDecisionPanel decision={decision} compact />
-                      ) : (
-                        <p className="text-slate-500">Decision snapshot unavailable for this historical observation.</p>
-                      )}
-
-                      {lastCompletion?.observation_id === obs.observation_id && (
-                        <div className="p-3 rounded-lg border border-teal-200 bg-teal-50 text-teal-900">
-                          <p className="font-semibold">Assessment #{lastCompletion.assessment_id} completed</p>
-                          <p className="mt-1">Risk: {lastCompletion.assessment.severity} × {lastCompletion.assessment.likelihood} × {lastCompletion.assessment.exposure} = {lastCompletion.assessment.risk_score} ({lastCompletion.assessment.risk_band}).</p>
-                          {lastCompletion.alert_ids.length > 0 && <p className="mt-1">Actionable alert{lastCompletion.alert_ids.length > 1 ? 's' : ''} #{lastCompletion.alert_ids.join(', #')} linked to this observation.</p>}
-                          {lastCompletion.safety_decision.outcome === 'pending' && <p className="mt-1">Other findings in this observation still need assessment.</p>}
-                        </div>
-                      )}
-
-                      <ObservationImages observationId={obs.observation_id} />
-
-                      {/* Detected Hazards in this observation */}
-                      <div>
-                        <h5 className="font-bold text-slate-700 mb-2 uppercase tracking-wider text-[11px]">
-                          Detected Hazards & Assessments ({obs.detected_hazards.length})
-                        </h5>
-
-                        {obs.detected_hazards.length === 0 ? (
-                          <p className="text-slate-500 italic">No supported PPE findings recorded. This does not confirm site safety.</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {obs.detected_hazards.map((hazard, hIdx) => {
-                              const ass = latestAssessment(hazard.assessments);
-                              const bandStyle = formatRiskBand(ass?.risk_band);
-
-                              return (
-                                <div
-                                  key={hazard.detected_hazard_id || hIdx}
-                                  className="p-3 bg-white rounded-lg border border-slate-200 flex flex-wrap items-center justify-between gap-2"
-                                >
-                                  <div>
-                                    <span className="font-semibold text-slate-800 block text-xs">
-                                      {formatHazardType(hazard.hazard_type)}
-                                    </span>
-                                    <span className="text-[11px] text-slate-400 font-mono">
-                                      Detection confidence: {formatConfidence(hazard.detection_confidence)}
-                                    </span>
-                                  </div>
-
-                                  <div>
-                                    {ass?.status === 'completed' ? (
-                                      <div className="text-right">
-                                        <span className={`px-2 py-0.5 rounded-full font-bold text-[11px] border ${bandStyle.badgeClass}`}>
-                                          {bandStyle.label} ({ass.risk_score})
-                                        </span>
-                                        <p className="text-slate-500 mt-1">{ass.severity} × {ass.likelihood} × {ass.exposure} = {ass.risk_score}</p>
-                                      </div>
-                                    ) : (
-                                      <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-100 text-amber-800">
-                                        Pending inputs
-                                      </span>
-                                    )}
-                                  </div>
-                                  {ass?.status === 'pending' && canComplete && (
-                                    <PendingAssessmentCompletion
-                                      observation={obs}
-                                      assessment={ass}
-                                      onCompleted={(result) => {
-                                        setLastCompletion(result);
-                                        onAssessmentCompleted(result.observation_id);
-                                      }}
-                                    />
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+          <button
+            type="button"
+            onClick={() => {
+              void executeQuery();
+              parentOnRefresh?.();
+            }}
+            disabled={isLoading}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 hover:border-slate-300 text-slate-700 text-xs sm:text-sm font-semibold transition-colors shadow-2xs disabled:opacity-50"
+            title={`Last refreshed at ${lastRefreshed.toLocaleTimeString()}`}
+          >
+            <RefreshCw size={15} className={isLoading ? 'animate-spin text-teal-700' : 'text-slate-500'} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+        </div>
       </div>
+
+      {/* 2. Meaningful Backend Summary Metrics Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* Metric 1: Total Observations */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 shadow-2xs flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Total Observations
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center">
+              <History size={16} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <p className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
+              {totalObservations}
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1">Recorded audit trail</p>
+          </div>
+        </div>
+
+        {/* Metric 2: Pending Assessments (High Priority) */}
+        <div
+          className={`p-4 sm:p-5 rounded-2xl bg-white border shadow-2xs flex flex-col justify-between transition-colors ${
+            pendingAssessments > 0 ? 'border-amber-300 ring-2 ring-amber-400/20 bg-amber-50/20' : 'border-slate-200'
+          }`}
+        >
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-amber-900">
+              Pending Assessments
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center">
+              <Clock size={16} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <div className="flex items-baseline gap-2">
+              <p className="text-2xl sm:text-3xl font-bold tracking-tight text-amber-950">
+                {pendingAssessments}
+              </p>
+              {pendingAssessments > 0 && (
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-200 text-amber-900">
+                  Needs Context
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-amber-800/80 mt-1">Awaiting operator scoring input</p>
+          </div>
+        </div>
+
+        {/* Metric 3: High / Critical Findings */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 shadow-2xs flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-rose-800">
+              High / Critical
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center">
+              <ShieldAlert size={16} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <p className="text-2xl sm:text-3xl font-bold tracking-tight text-rose-900">
+              {highCriticalFindings}
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1">Urgent & actionable findings</p>
+          </div>
+        </div>
+
+        {/* Metric 4: Completed Assessments */}
+        <div className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 shadow-2xs flex flex-col justify-between">
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-wider text-emerald-800">
+              Completed Assessments
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+              <CheckCircle2 size={16} />
+            </div>
+          </div>
+          <div className="mt-3">
+            <p className="text-2xl sm:text-3xl font-bold tracking-tight text-emerald-950">
+              {completedAssessments}
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1">Fully calculated risk records</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Direct link feedback or error banner */}
+      {(directLinkObs || directLinkError) && (
+        <button type="button" onClick={returnToHistory} className="text-sm font-semibold text-teal-800 underline">Return to observation history</button>
+      )}
+      {supplemental && (
+        <section aria-label="Linked observation outside current page" className="space-y-3">
+          <p className="text-xs text-slate-600">Linked observation — outside the paginated results below.</p>
+          <ObservationRow observation={directLinkObs} isExpanded={expandedId === directLinkObs.observation_id}
+            onToggleExpand={() => toggleExpand(directLinkObs.observation_id)} highlightedAssessmentId={targetAssessmentId}
+            onAssessmentUpdated={handleAssessmentUpdated} onWorkAreaUpdated={handleWorkAreaUpdated} />
+        </section>
+      )}
+      {directLinkError && (
+        <div role="alert" className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+            <span>{directLinkError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDirectLinkError(null)}
+            className="text-rose-600 hover:text-rose-900 font-bold"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* 3. Risk & Assessment Filter Tabs */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-2 shadow-2xs">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          {RISK_TABS.map((tab) => {
+            const isSelected = selectedRisk === tab.id;
+            let count: number | undefined;
+
+            if (tab.id === 'All') {
+              count = queryResult?.unfiltered_risk_total;
+            } else if (queryResult?.observation_counts) {
+              count = queryResult.observation_counts[tab.id];
+            }
+
+            const isPendingTab = tab.id === 'Pending';
+
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => {
+                  setSelectedRisk(tab.id);
+                  setPageOffset(0);
+                }}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all select-none ${
+                  isSelected
+                    ? isPendingTab
+                      ? 'bg-amber-500 text-slate-950 shadow-xs'
+                      : 'bg-teal-800 text-white shadow-xs'
+                    : isPendingTab && (count ?? 0) > 0
+                    ? 'bg-amber-50 text-amber-900 hover:bg-amber-100/80 border border-amber-200'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                {isPendingTab && <Clock size={13} className={isSelected ? 'text-slate-950' : 'text-amber-700'} />}
+                <span>{tab.label}</span>
+                {count !== undefined && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      isSelected
+                        ? isPendingTab
+                          ? 'bg-slate-950/20 text-slate-950'
+                          : 'bg-white/20 text-white'
+                        : isPendingTab
+                        ? 'bg-amber-200 text-amber-950'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 4. Search & Additional Filters Toolbar */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {/* Search by Observation ID */}
+          <div className="lg:col-span-2">
+            <label htmlFor={searchInputId} className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+              Search by Observation ID
+            </label>
+            <div className="relative">
+              <Search size={15} className="absolute left-3 top-2.5 text-slate-400" />
+              <input
+                id={searchInputId}
+                type="text"
+                value={searchId}
+                onChange={(e) => {
+                  setSearchId(e.target.value);
+                  setPageOffset(0);
+                }}
+                placeholder="e.g. obs-9a2c8..."
+                className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition-colors"
+              />
+              {searchId && (
+                <button
+                  type="button"
+                  onClick={() => setSearchId('')}
+                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Work Area / Zone filter */}
+          <div>
+            <label htmlFor={workAreaSelectId} className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+              Work Area / Zone
+            </label>
+            <div className="relative">
+              <MapPin size={15} className="absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
+              <select
+                id={workAreaSelectId}
+                value={selectedArea}
+                onChange={(e) => {
+                  setSelectedArea(e.target.value);
+                  setPageOffset(0);
+                }}
+                className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition-colors"
+              >
+                <option value="">All Work Areas</option>
+                {workAreas.map((area) => (
+                  <option key={area} value={area}>
+                    {area}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Date range: Start Date */}
+          <div>
+            <label htmlFor={startDateInputId} className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+              Start Date
+            </label>
+            <div className="relative">
+              <Calendar size={15} className="absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
+              <input
+                id={startDateInputId}
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setPageOffset(0);
+                }}
+                className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Date range: End Date */}
+          <div>
+            <label htmlFor={endDateInputId} className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+              End Date
+            </label>
+            <div className="relative">
+              <Calendar size={15} className="absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
+              <input
+                id={endDateInputId}
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setPageOffset(0);
+                }}
+                className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition-colors"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Toolbar Footer: Sort & Clear Filters */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400">Sort:</span>
+            <div className="inline-flex items-center gap-1">
+              <ArrowUpDown size={13} className="text-slate-400" />
+              <label htmlFor={sortSelectId} className="sr-only">Sort observations</label>
+              <select
+                id={sortSelectId}
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as 'newest' | 'oldest')}
+                className="bg-transparent font-semibold text-slate-700 hover:text-slate-900 focus:outline-hidden"
+              >
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="inline-flex items-center gap-1.5 font-semibold text-teal-700 hover:text-teal-900 transition-colors"
+              >
+                <X size={13} />
+                <span>Clear Filters</span>
+              </button>
+            )}
+            <span className="text-slate-400">
+              Showing {currentStart}–{currentEnd} of {totalMatching} matched observations
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 5. Main Results View States */}
+      {/* State 1: Database Unconfigured (503) */}
+      {!isDbConfigured && !isLoading && (
+        <div className="p-8 rounded-2xl bg-white border border-slate-200 shadow-2xs text-center">
+          <Database size={32} className="text-slate-300 mx-auto mb-2" />
+          <h4 className="font-bold text-slate-800 text-sm">Database Unconfigured or Unavailable</h4>
+          <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+            Persistent observation history requires an active PostgreSQL connection. Check your database configuration and refresh.
+          </p>
+          <button
+            type="button"
+            onClick={() => void executeQuery()}
+            className="mt-4 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-semibold transition-colors"
+          >
+            Retry Connection
+          </button>
+        </div>
+      )}
+
+      {/* State 2: Error State */}
+      {isDbConfigured && errorMessage && !isLoading && (
+        <div className="p-5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold text-rose-900 text-sm">Failed to Query Safety Incidents</h4>
+              <p className="text-xs text-rose-700 mt-0.5">{errorMessage}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void executeQuery()}
+            className="px-3.5 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-900 rounded-lg text-xs font-semibold shrink-0 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* State 3: Loading Skeleton */}
+      {isLoading && (
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map((idx) => (
+            <div
+              key={idx}
+              className="p-5 rounded-2xl border border-slate-200 bg-white shadow-2xs animate-pulse flex items-center justify-between"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-16 h-16 rounded-xl bg-slate-200" />
+                <div className="space-y-2">
+                  <div className="h-4 w-44 bg-slate-200 rounded" />
+                  <div className="h-3 w-64 bg-slate-200 rounded" />
+                </div>
+              </div>
+              <div className="h-7 w-24 bg-slate-200 rounded-full" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* State 4: Empty State */}
+      {isDbConfigured && !isLoading && !errorMessage && displayItems.length === 0 && (
+        <div className="p-12 text-center rounded-2xl border border-dashed border-slate-300 bg-white shadow-2xs">
+          <Filter size={32} className="text-slate-300 mx-auto mb-2" />
+          <h3 className="font-bold text-slate-800 text-base">No Matching Safety Incidents</h3>
+          <p className="text-xs text-slate-500 mt-1.5 max-w-md mx-auto leading-relaxed">
+            {hasActiveFilters
+              ? 'No observations match your current filter criteria. Try adjusting your risk filter, search query, or date range.'
+              : 'No safety observations have been recorded yet. Submit an image assessment in AI Safety Analysis to begin.'}
+          </p>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="mt-4 px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-semibold transition-colors"
+            >
+              Reset All Filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* State 5: Observations List with Redesigned Rows */}
+      {isDbConfigured && !isLoading && !errorMessage && displayItems.length > 0 && (
+        <div className="space-y-3" aria-label="Paginated observations">
+          {displayItems.map((obs) => (
+            <ObservationRow
+              key={obs.observation_id}
+              observation={obs}
+              isExpanded={expandedId === obs.observation_id}
+              onToggleExpand={() => toggleExpand(obs.observation_id)}
+              highlightedAssessmentId={expandedId === obs.observation_id ? targetAssessmentId : null}
+              onAssessmentUpdated={handleAssessmentUpdated}
+              onWorkAreaUpdated={handleWorkAreaUpdated}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* 6. Real Pagination Controls */}
+      {isDbConfigured && !isLoading && totalMatching > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs flex flex-wrap items-center justify-between gap-4 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500 font-medium">Rows per page:</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setPageOffset(0);
+              }}
+              className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-semibold text-slate-700 focus:outline-hidden"
+            >
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="text-slate-500">
+              Page <strong className="text-slate-800">{currentPage}</strong> of{' '}
+              <strong className="text-slate-800">{Math.max(1, totalPages)}</strong>
+            </span>
+
+            <div className="inline-flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPageOffset((prev) => Math.max(0, prev - pageSize))}
+                disabled={pageOffset === 0}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-700 font-semibold rounded-lg disabled:opacity-40 transition-colors"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => setPageOffset((prev) => prev + pageSize)}
+                disabled={pageOffset + pageSize >= totalMatching}
+                className="px-3 py-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-700 font-semibold rounded-lg disabled:opacity-40 transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-};
+}

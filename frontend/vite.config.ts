@@ -7,6 +7,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
+      '/observation-query': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
       '/assessments': {
         target: 'http://localhost:8000',
         changeOrigin: true,

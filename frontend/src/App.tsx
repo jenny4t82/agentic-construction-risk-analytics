@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { incidentTarget } from './utils/incidentNavigation';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { LoginPage, SignupPage } from './auth/AuthPages';
 import { checkBackendHealth, fetchAlerts, fetchObservationDetail, fetchObservations, submitImageAssessment } from './api/client';
@@ -8,16 +9,15 @@ import { AssessmentResults } from './components/AssessmentResults';
 import { ImageUploader } from './components/ImageUploader';
 import { ObservationHistory } from './components/ObservationHistory';
 import { OverviewPage } from './components/OverviewPage';
-import { PendingAssessmentCompletion } from './components/PendingAssessmentCompletion';
+import { ObservationRow } from './components/ObservationRow';
 import { RecurrenceAnalyticsPage } from './components/RecurrenceAnalyticsPage';
 import { ReportsPage } from './components/ReportsPage';
-import { SafetyDecisionPanel } from './components/SafetyDecisionPanel';
 import { ZoneAnalyticsPage } from './components/ZoneAnalyticsPage';
-import type { AlertDetailResponse, AssessmentCompletionResponse, AssessmentsResponse, ImageAssessmentParams, ObservationDetailResponse } from './types';
+import type { AlertDetailResponse, AssessmentsResponse, ImageAssessmentParams, ObservationDetailResponse } from './types';
 
 type AuthRoute = 'login' | 'signup';
 const readRoute = (): AppSection | AuthRoute => {
-  const hash = typeof window === 'undefined' ? '' : window.location.hash.slice(1);
+  const hash = typeof window === 'undefined' ? '' : window.location.hash.slice(1).split('?')[0];
   if (hash === 'login' || hash === 'signup') return hash;
   if (hash === 'incidents' || hash === 'history' || hash === 'alerts' || hash === 'zones' || hash === 'recurrence' || hash === 'reports' || hash === 'analysis' || hash === 'experimental') return hash === 'history' ? 'incidents' : hash === 'experimental' ? 'analysis' : hash;
   if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('tab') === 'experimental') return 'analysis';
@@ -25,7 +25,6 @@ const readRoute = (): AppSection | AuthRoute => {
 };
 
 function SafetyWorkspace({ view, onNavigate }: { view: 'analysis' | 'incidents'; onNavigate: (section: AppSection) => void }) {
-  const { user } = useAuth();
   const [isBackendHealthy, setIsBackendHealthy] = useState(false);
   const [isDatabaseConfigured, setIsDatabaseConfigured] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -33,23 +32,42 @@ function SafetyWorkspace({ view, onNavigate }: { view: 'analysis' | 'incidents';
   const [latestAssessment, setLatestAssessment] = useState<AssessmentsResponse | null>(null);
   const [latestObservation, setLatestObservation] = useState<ObservationDetailResponse | null>(null);
   const [latestAlerts, setLatestAlerts] = useState<AlertDetailResponse[]>([]);
-  const [completion, setCompletion] = useState<AssessmentCompletionResponse | null>(null);
   const [observations, setObservations] = useState<ObservationDetailResponse[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const canComplete = user?.role === 'safety_officer' || user?.role === 'admin';
+  const recoveryKey = 'safesite.pending-analysis';
+  useEffect(() => {
+    const id = sessionStorage.getItem(recoveryKey);
+    if (view !== 'analysis' || !id) return;
+    let active = true;
+    void fetchObservationDetail(id).then(obs => { if (active) setLatestObservation(obs); })
+      .catch(reason => { if (active) setHistoryError(reason instanceof Error ? reason.message : 'Unable to restore saved observation'); });
+    return () => { active = false; };
+  }, [view]);
 
   const loadHistory = useCallback(async () => {
     setIsHistoryLoading(true);
     try {
       const result = await fetchObservations(20, 0);
+      const target = incidentTarget();
+      if (view === 'incidents' && target.observationId) {
+        const observation = await fetchObservationDetail(target.observationId);
+        if (target.assessmentId && !observation.detected_hazards.some((hazard) => hazard.assessments.some((assessment) => String(assessment.assessment_id) === target.assessmentId))) {
+          throw new Error('The requested assessment does not belong to this observation');
+        }
+        result.data = [observation];
+      }
       setObservations(result.data);
       setIsDatabaseConfigured(result.isDatabaseConfigured);
       setHistoryError(result.error);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : 'Unable to load observation');
     } finally {
       setIsHistoryLoading(false);
     }
-  }, []);
+  }, [view]);
+
+  useEffect(() => { window.addEventListener('hashchange', loadHistory); return () => window.removeEventListener('hashchange', loadHistory); }, [loadHistory]);
 
   useEffect(() => {
     const check = async () => setIsBackendHealthy(await checkBackendHealth());
@@ -65,10 +83,11 @@ function SafetyWorkspace({ view, onNavigate }: { view: 'analysis' | 'incidents';
     setLatestAssessment(null);
     setLatestObservation(null);
     setLatestAlerts([]);
-    setCompletion(null);
+    sessionStorage.removeItem(recoveryKey);
     try {
       const result = await submitImageAssessment(file, params);
       setLatestAssessment(result);
+      sessionStorage.setItem(recoveryKey, result.observation_id);
       await loadHistory();
       try {
         setLatestObservation(await fetchObservationDetail(result.observation_id));
@@ -85,31 +104,39 @@ function SafetyWorkspace({ view, onNavigate }: { view: 'analysis' | 'incidents';
     }
   };
 
-  const onCompleted = (result: AssessmentCompletionResponse) => {
-    setCompletion(result);
+  const onCompleted = (observationId: string) => {
     setLatestAssessment(null);
     void loadHistory();
-    void fetchObservationDetail(result.observation_id).then(setLatestObservation).catch((reason) => {
+    void fetchObservationDetail(observationId).then(setLatestObservation).catch((reason) => {
       setHistoryError(reason instanceof Error ? reason.message : 'Unable to refresh the saved observation');
     });
-    if (result.safety_decision.outcome === 'alert') {
-      void fetchAlerts(result.observation_id).then(setLatestAlerts).catch(() => setLatestAlerts([]));
-    }
   };
 
   if (view === 'incidents') {
-    return <div className="space-y-7">
-      <div><p className="text-sm text-teal-700 font-bold">Persisted records</p><h2 className="text-3xl font-bold mt-1">Safety incidents</h2><p className="text-slate-500 mt-2">Review recorded observations, findings, assessments and evidence.</p></div>
-      <button onClick={() => onNavigate('analysis')} className="px-4 py-2.5 rounded-lg bg-teal-700 text-white text-sm font-semibold">Analyze another image</button>
-      <ObservationHistory observations={observations} isLoading={isHistoryLoading} isDatabaseConfigured={isDatabaseConfigured && isBackendHealthy} error={historyError} onRefresh={loadHistory} onAssessmentCompleted={(observationId) => { if (latestAssessment?.observation_id === observationId) setLatestAssessment(null); void loadHistory(); }} onWorkAreaUpdated={(updated) => { setObservations((current) => current.map((item) => item.observation_id === updated.observation_id ? updated : item)); }} />
-    </div>;
+    return (
+      <ObservationHistory
+        observations={observations}
+        onNavigate={onNavigate}
+        onRefresh={loadHistory}
+        onAssessmentCompleted={(observationId) => {
+          if (latestAssessment?.observation_id === observationId) setLatestAssessment(null);
+          void loadHistory();
+        }}
+        onWorkAreaUpdated={(updated) => {
+          setObservations((current) =>
+            current.map((item) => (item.observation_id === updated.observation_id ? updated : item))
+          );
+        }}
+      />
+    );
   }
 
   return <div className="space-y-7">
     <div><p className="text-sm text-teal-700 font-bold">Persisted image assessment</p><h2 className="text-3xl font-bold mt-1">AI Safety Analysis</h2><p className="text-slate-500 mt-2">Upload a construction-site image to identify supported PPE violations, assess risk, and record findings for review.</p></div>
-    {!isDatabaseConfigured && !isHistoryLoading && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">Persisted analysis is unavailable until the database connection is restored.</p>}
-    {isDatabaseConfigured && <ImageUploader onAnalyze={analyze} isLoading={isAnalyzing} error={assessmentError} onClear={() => { setLatestAssessment(null); setCompletion(null); setLatestObservation(null); setLatestAlerts([]); }} />}
-    {latestAssessment && <>
+    {(!isDatabaseConfigured || !isBackendHealthy) && !isHistoryLoading && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">Persisted analysis is unavailable until the database connection is restored.</p>}
+    {historyError && !assessmentError && <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{historyError}</p>}
+    {isDatabaseConfigured && <ImageUploader onAnalyze={analyze} isLoading={isAnalyzing} error={assessmentError} onClear={() => { sessionStorage.removeItem(recoveryKey); setLatestAssessment(null); setLatestObservation(null); setLatestAlerts([]); }} />}
+    {latestAssessment && !latestObservation && latestAssessment.safety_decision.outcome !== 'pending' && <>
       <AssessmentResults assessment={latestAssessment} />
       <section className="rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm text-teal-900">
         <p>Saved as Observation <strong>{latestAssessment.observation_id}</strong>.</p>
@@ -118,23 +145,10 @@ function SafetyWorkspace({ view, onNavigate }: { view: 'analysis' | 'incidents';
           {latestAlerts.length > 0 && <button onClick={() => onNavigate('alerts')} className="font-semibold underline">View alert{latestAlerts.length > 1 ? 's' : ''} #{latestAlerts.map((alert) => alert.alert_id).join(', #')} in Alert Register</button>}
         </div>
       </section>
-      {latestAssessment.safety_decision.outcome === 'pending' && <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <p className="font-semibold">Assessment Pending</p>
-        <p>Additional operator context is required to complete risk scoring. Review this observation in History{canComplete ? ', or complete its missing inputs here.' : '.'}</p>
-        {canComplete && latestObservation?.detected_hazards.flatMap((hazard) => hazard.assessments.filter((item) => item.status === 'pending' && item.assessment_id != null)).map((item) => (
-          <PendingAssessmentCompletion key={item.assessment_id} observation={latestObservation} assessment={item} onCompleted={onCompleted} />
-        ))}
-        <button onClick={() => onNavigate('incidents')} className="mt-3 font-semibold underline">Open Observation History</button>
-      </section>}
     </>}
-    {completion && <section className="rounded-xl border border-teal-200 bg-teal-50 p-5 text-sm text-teal-900 space-y-3">
-      <h3 className="font-bold">Assessment #{completion.assessment_id} completed for Observation {completion.observation_id}</h3>
-      <p>Severity {completion.assessment.severity} × likelihood {completion.assessment.likelihood} × exposure {completion.assessment.exposure} = risk score {completion.assessment.risk_score} ({completion.assessment.risk_band}).</p>
-      <SafetyDecisionPanel decision={completion.safety_decision} />
-      {completion.alert_ids.length > 0 && <p>Linked alert{completion.alert_ids.length > 1 ? 's' : ''} #{completion.alert_ids.join(', #')}. <button onClick={() => onNavigate('alerts')} className="font-semibold underline">Open Alert Register</button></p>}
-      {completion.safety_decision.outcome === 'pending' && <p>Other findings still need assessment. <button onClick={() => onNavigate('incidents')} className="font-semibold underline">Continue in Observation History</button></p>}
-      <button onClick={() => onNavigate('incidents')} className="font-semibold underline">View updated observation</button>
-    </section>}
+    {latestObservation && <ObservationRow key={latestObservation.observation_id} observation={latestObservation}
+      isExpanded onToggleExpand={() => {}} onAssessmentUpdated={onCompleted}
+      onWorkAreaUpdated={setLatestObservation} />}
   </div>;
 }
 

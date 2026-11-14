@@ -11,11 +11,13 @@ import { ObservationThumbnail } from './ObservationThumbnail';
 interface Props {
   area: string;
   hazardType?: string;
+  areaMode?: 'zone' | 'recurrence';
   window: { start?: string; end?: string };
   onClose: () => void;
+  expectedObservationCount?: number;
 }
 
-export function ZoneObservationDrawer({ area, hazardType, window, onClose }: Props) {
+export function ZoneObservationDrawer({ area, hazardType, areaMode = 'zone', window, onClose, expectedObservationCount }: Props) {
   const [data, setData] = useState<FindingObservationListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
@@ -30,11 +32,11 @@ export function ZoneObservationDrawer({ area, hazardType, window, onClose }: Pro
 
   useEffect(() => {
     let active = true;
-    void fetchFindingObservations({ work_area: area, hazard_type: hazardType, start: window.start, end: window.end, area_mode: 'zone', sort: 'newest', limit, offset })
+    void fetchFindingObservations({ work_area: area, hazard_type: hazardType, start: window.start, end: window.end, area_mode: areaMode, sort: 'newest', limit, offset })
       .then(result => { if (active) { setData(result); setError(null); setLoadedRequest(requestKey); } })
       .catch(reason => { if (active) { setData(null); setError(reason instanceof Error ? reason.message : 'Unable to load supporting observations'); setLoadedRequest(requestKey); } });
     return () => { active = false; };
-  }, [area, hazardType, window.start, window.end, limit, offset, requestKey]);
+  }, [area, hazardType, areaMode, window.start, window.end, limit, offset, requestKey]);
 
   const pages = useMemo(() => Math.max(1, Math.ceil((currentData?.total_observations ?? 0) / limit)), [currentData, limit]);
   const page = Math.floor(offset / limit) + 1;
@@ -42,10 +44,10 @@ export function ZoneObservationDrawer({ area, hazardType, window, onClose }: Pro
   return <div className="fixed inset-0 z-40 bg-slate-950/45" data-modal-backdrop onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="zone-observations-title" tabIndex={-1} className="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col overflow-hidden bg-slate-50 shadow-2xl">
       <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-4 sm:p-6">
-        <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-teal-700">Evidence-linked findings</p><h2 id="zone-observations-title" className="mt-1 break-words text-xl font-bold text-slate-900 sm:text-2xl">{title} · {area}</h2><p className="mt-2 text-sm text-slate-600">One row per persisted observation. Matching finding rows are listed within each observation.</p></div>
+        <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-teal-700">{areaMode === 'recurrence' ? 'Recurring finding evidence' : 'Evidence-linked findings'}</p><h2 id="zone-observations-title" className="mt-1 break-words text-xl font-bold text-slate-900 sm:text-2xl">{title} · {area}</h2><p className="mt-2 text-sm text-slate-600">One row per persisted observation. Matching finding rows are listed within each observation.</p></div>
         <button type="button" onClick={onClose} aria-label="Close supporting observations" className="shrink-0 rounded-lg p-2 text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-teal-700"><X size={20} /></button>
       </header>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 sm:px-6"><p>{currentData ? currentData.total_observations + ' observations · ' + currentData.total_matching_findings + ' matching findings' : 'Loading totals'}</p><label className="flex items-center gap-2">Per page<select value={limit} onChange={event => { setOffset(0); setLimit(Number(event.target.value)); }} className="rounded-lg border border-slate-300 px-2 py-1"><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label></div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 sm:px-6"><div><p>{currentData ? currentData.total_observations + ' observations · ' + currentData.total_matching_findings + ' matching findings' : 'Loading totals'}</p>{areaMode === 'recurrence' && expectedObservationCount !== undefined && currentData && currentData.total_observations !== expectedObservationCount && <p role="status" className="mt-1 text-xs text-amber-800">The supporting-observation total differs from the recurrence summary ({expectedObservationCount}). Recheck the selected date window.</p>}</div><label className="flex items-center gap-2">Per page<select value={limit} onChange={event => { setOffset(0); setLimit(Number(event.target.value)); }} className="rounded-lg border border-slate-300 px-2 py-1"><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label></div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
         {loading && !currentData && <p role="status" className="rounded-xl bg-white p-6 text-sm text-slate-500">Loading supporting observations…</p>}
         {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</p>}

@@ -1,22 +1,27 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { BarChart3, Clock3, MapPinned, RefreshCw, Repeat2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { BarChart3, CalendarClock, MapPinned, RefreshCw, Repeat2, Search } from 'lucide-react';
 import { fetchWorkAreaRecurrence } from '../api/client';
-import type { WorkAreaRecurrenceResponse } from '../types';
+import type { WorkAreaRecurrenceGroup, WorkAreaRecurrenceResponse } from '../types';
 import { formatDateTime, formatHazardType } from '../utils/formatters';
 import type { AppSection } from './AppShell';
+import { ZoneObservationDrawer } from './ZoneObservationDrawer';
 
 type Bounds = { start?: string; end?: string };
+type GroupSort = 'observations' | 'area' | 'hazard';
 
-export function RecurrenceAnalyticsPage({ onNavigate }: { onNavigate: (section: AppSection) => void }) {
+export function RecurrenceAnalyticsPage({ onNavigate: _onNavigate }: { onNavigate: (section: AppSection) => void }) {
   const [data, setData] = useState<WorkAreaRecurrenceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [startInput, setStartInput] = useState('');
   const [endInput, setEndInput] = useState('');
   const [bounds, setBounds] = useState<Bounds>({});
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<GroupSort>('observations');
+  const [selected, setSelected] = useState<WorkAreaRecurrenceGroup | null>(null);
   const requestNumber = useRef(0);
 
-  const load = async (nextBounds: Bounds) => {
+  const load = useCallback(async (nextBounds: Bounds) => {
     const request = ++requestNumber.current;
     setLoading(true);
     setError(null);
@@ -31,17 +36,19 @@ export function RecurrenceAnalyticsPage({ onNavigate }: { onNavigate: (section: 
     } finally {
       if (request === requestNumber.current) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    let active = true;
     const request = ++requestNumber.current;
-    void fetchWorkAreaRecurrence().then((result) => {
-      if (request === requestNumber.current) setData(result);
+    void fetchWorkAreaRecurrence().then(result => {
+      if (active && request === requestNumber.current) setData(result);
     }).catch((reason: unknown) => {
-      if (request === requestNumber.current) setError(reason instanceof Error ? reason.message : 'Unable to load recurrence analytics');
+      if (active && request === requestNumber.current) setError(reason instanceof Error ? reason.message : 'Unable to load recurrence analytics');
     }).finally(() => {
-      if (request === requestNumber.current) setLoading(false);
+      if (active && request === requestNumber.current) setLoading(false);
     });
+    return () => { active = false; requestNumber.current += 1; };
   }, []);
 
   const applyBounds = (event: FormEvent<HTMLFormElement>) => {
@@ -58,6 +65,7 @@ export function RecurrenceAnalyticsPage({ onNavigate }: { onNavigate: (section: 
     }
     const nextBounds = { start: start?.toISOString(), end: end?.toISOString() };
     setBounds(nextBounds);
+    setSelected(null);
     void load(nextBounds);
   };
 
@@ -65,67 +73,78 @@ export function RecurrenceAnalyticsPage({ onNavigate }: { onNavigate: (section: 
     setStartInput('');
     setEndInput('');
     setBounds({});
+    setSelected(null);
     void load({});
   };
 
-  const repeatedGroups = data?.groups.filter((group) => group.is_repeated) ?? [];
-  const highestGroup = repeatedGroups[0]; // The backend orders by count, then area and hazard type.
-  const rankedRecurringAreas = data?.work_areas_by_observation_count.filter((area) => repeatedGroups.some((group) => group.work_area === area.work_area)) ?? [];
+  const groups = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    return [...(data?.groups ?? [])]
+      .filter(group => !query || group.work_area.toLocaleLowerCase().includes(query) || formatHazardType(group.hazard_type).toLocaleLowerCase().includes(query))
+      .sort((a, b) => {
+        if (sort === 'area') return a.work_area.localeCompare(b.work_area) || a.hazard_type.localeCompare(b.hazard_type);
+        if (sort === 'hazard') return a.hazard_type.localeCompare(b.hazard_type) || a.work_area.localeCompare(b.work_area);
+        return b.observation_count - a.observation_count || a.work_area.localeCompare(b.work_area) || a.hazard_type.localeCompare(b.hazard_type);
+      });
+  }, [data, search, sort]);
+  const repeatedCount = data?.groups.filter(group => group.is_repeated).length ?? 0;
+  const distinctSupportingObservations = new Set(data?.groups.flatMap(group => group.observation_ids) ?? []).size;
+  const categoryCount = new Set(data?.groups.map(group => group.hazard_type) ?? []).size;
+  const selectedWindow = { start: data?.window_start ?? undefined, end: data?.window_end ?? undefined };
 
-  return <div className="space-y-7">
-    <div className="flex flex-wrap items-end justify-between gap-4">
+  return <main className="space-y-6 sm:space-y-7">
+    <header className="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p className="text-sm text-teal-700 font-bold">Historical observation review</p>
-        <h2 className="text-3xl font-bold mt-1">Recurrence analytics</h2>
-        <p className="text-slate-500 mt-2">Repeated supported PPE violations across distinct recorded observations in named work areas.</p>
+        <p className="text-sm font-bold text-teal-700">Historical observation review</p>
+        <h2 className="mt-1 text-3xl font-bold text-slate-900">Recurrence analytics</h2>
+        <p className="mt-2 max-w-3xl text-sm text-slate-600">A recurring result means the same supported PPE hazard category was recorded in the same named work area across at least two distinct observations.</p>
       </div>
-      <button type="button" onClick={() => void load(bounds)} disabled={loading} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 hover:border-teal-400 disabled:opacity-60"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Refresh</button>
-    </div>
+      <button type="button" onClick={() => void load(bounds)} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-teal-400 disabled:opacity-60"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Refresh</button>
+    </header>
 
-    <section className="panel p-5 sm:p-6 space-y-4" aria-label="Observation time filter">
-      <div className="flex items-center gap-2"><Clock3 size={18} className="text-teal-700" /><h3 className="font-bold">Observation time window</h3></div>
+    <section className="panel space-y-4 p-4 sm:p-5" aria-label="Observation time filter">
+      <div className="flex items-center gap-2"><CalendarClock size={18} className="text-teal-700" /><h3 className="font-bold text-slate-900">Observation time window</h3></div>
       <form onSubmit={applyBounds} className="flex flex-wrap items-end gap-3">
-        <label className="text-sm font-semibold text-slate-700">Start date/time
-          <input aria-label="Start date/time" type="datetime-local" value={startInput} onChange={(event) => setStartInput(event.target.value)} className="block mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
-        </label>
-        <label className="text-sm font-semibold text-slate-700">End date/time
-          <input aria-label="End date/time" type="datetime-local" value={endInput} onChange={(event) => setEndInput(event.target.value)} className="block mt-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" />
-        </label>
-        <button type="submit" disabled={loading} className="px-4 py-2 rounded-lg bg-teal-700 text-white text-sm font-semibold disabled:opacity-60">Apply</button>
-        <button type="button" onClick={clearBounds} disabled={loading} className="px-4 py-2 rounded-lg border border-slate-300 text-sm font-semibold text-slate-700 disabled:opacity-60">Clear</button>
+        <label className="grid gap-1 text-sm font-semibold text-slate-700">Start date/time<input aria-label="Start date/time" type="datetime-local" value={startInput} onChange={event => setStartInput(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" /></label>
+        <label className="grid gap-1 text-sm font-semibold text-slate-700">End date/time<input aria-label="End date/time" type="datetime-local" value={endInput} onChange={event => setEndInput(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" /></label>
+        <button type="submit" disabled={loading} className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">Apply</button>
+        <button type="button" onClick={clearBounds} disabled={loading || (!bounds.start && !bounds.end && !startInput && !endInput)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-60">Clear filters</button>
       </form>
-      <p className="text-sm text-slate-600">{data ? (data.window_start || data.window_end ? `Showing observations from ${data.window_start ? formatDateTime(data.window_start) : 'the beginning'} up to, but not including, ${data.window_end ? formatDateTime(data.window_end) : 'the present'}.` : 'All history — no date filter applied.') : (bounds.start || bounds.end ? 'Loading selected time window.' : 'All history — no date filter applied.')}</p>
-      <p className="text-xs text-slate-500">Times entered here use your local timezone. Filtering uses observation time; the start is inclusive and the end is exclusive.</p>
+      <p className="text-xs text-slate-600">Times use your local timezone. Filtering uses observation time with an inclusive start and exclusive end. {data ? (data.window_start || data.window_end ? `Showing ${data.window_start ? formatDateTime(data.window_start) : 'the beginning'} to ${data.window_end ? formatDateTime(data.window_end) : 'the present'} (end excluded).` : 'All history.') : ''}</p>
     </section>
 
-    {error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
+    {error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{error}</div>}
     {loading && <div role="status" className="panel p-8 text-sm text-slate-500">Loading recurrence analytics…</div>}
     {!loading && data && <>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Stat icon={MapPinned} label="Work areas with recurrence" value={data.repeated_work_area_count} detail="Named areas with at least one repeated PPE finding" />
-        <Stat icon={Repeat2} label="Recurring PPE groups" value={repeatedGroups.length} detail="Area and canonical PPE violation pairs" />
-        <Stat icon={BarChart3} label="Highest group count" value={highestGroup?.observation_count ?? 0} detail={highestGroup ? `${highestGroup.work_area} · ${formatHazardType(highestGroup.hazard_type)}` : 'No repeated group in this window'} />
-      </div>
-
-      <section className="panel overflow-hidden">
-        <div className="panel-heading"><div><h3>Work areas with recurring PPE findings</h3><p>Areas with at least one repeated group, ranked by the backend's distinct-observation count for any supported PPE violation. Counts can also include other findings.</p></div><MapPinned size={20} className="text-teal-600" /></div>
-        {rankedRecurringAreas.length === 0 ? <p className="p-6 text-sm text-slate-500">No work area has a repeated PPE finding in this time window.</p> : <ol className="divide-y divide-slate-100">{rankedRecurringAreas.map((area, index) => <li key={area.work_area} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 text-sm"><div><span className="text-slate-400 mr-3">{index + 1}.</span><strong className="text-slate-800">{area.work_area}</strong></div><span className="font-semibold text-slate-700">{area.observation_count} distinct observation{area.observation_count === 1 ? '' : 's'}</span></li>)}</ol>}
+      <section aria-label="Recurrence summary" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat icon={Repeat2} label="Recurring area/category pairs" value={repeatedCount} detail="Pairs supported by at least two distinct observations" />
+        <Stat icon={MapPinned} label="Work areas with recurrence" value={data.repeated_work_area_count} detail="Named free-text work areas" />
+        <Stat icon={BarChart3} label="Distinct supporting observations" value={distinctSupportingObservations} detail="Unique IDs across all listed area/category pairs" />
+        <Stat icon={Search} label="Supported PPE categories" value={categoryCount} detail="Categories present in this time window" />
       </section>
 
-      <section className="space-y-4" aria-label="PPE violation observation groups">
-        <div><h3 className="text-xl font-bold">PPE violation groups</h3><p className="text-sm text-slate-500 mt-1">Two or more distinct observations of the same supported PPE violation in one named work area are marked repeated.</p></div>
-        {data.groups.length === 0 ? <div className="panel p-8 text-sm text-slate-600">No supported PPE-violation observations were recorded in named work areas for this time window. This does not establish that work areas are safe.</div> : data.groups.map((group) => <article key={`${group.work_area}\u0000${group.hazard_type}`} className="panel p-5 sm:p-6 space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-teal-700">{group.work_area}</p><h4 className="text-lg font-bold text-slate-900 mt-1">{formatHazardType(group.hazard_type)}</h4></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${group.is_repeated ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>{group.is_repeated ? 'Repeated' : 'Observed once'}</span></div>
-          <p className="text-sm text-slate-700"><strong>{group.observation_count}</strong> distinct observation{group.observation_count === 1 ? '' : 's'}</p>
-          <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Contributing observation IDs</p><div className="mt-2 flex flex-wrap gap-2">{group.observation_ids.map((id) => <code key={id} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs text-slate-700 break-all">{id}</code>)}</div></div>
-          <button type="button" onClick={() => onNavigate('incidents')} className="text-sm font-semibold text-teal-700 underline">View Observation History</button>
-        </article>)}
+      <section className="panel space-y-4 p-4 sm:p-5" aria-labelledby="recurrence-groups-title">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div><h3 id="recurrence-groups-title" className="text-lg font-bold text-slate-900">Area and hazard combinations</h3><p className="mt-1 max-w-3xl text-sm text-slate-600">Counts are distinct persisted observation IDs for one category in one named area. They are frequency measures, not risk scores or worker counts.</p></div>
+          <div className="flex flex-wrap gap-2">
+            <label className="relative"><span className="sr-only">Search work areas or PPE categories</span><Search aria-hidden="true" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search area or category" className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm sm:w-56" /></label>
+            <label className="sr-only" htmlFor="recurrence-sort">Sort combinations</label><select id="recurrence-sort" value={sort} onChange={event => setSort(event.target.value as GroupSort)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="observations">Sort: observation count</option><option value="area">Sort: work area</option><option value="hazard">Sort: hazard category</option></select>
+          </div>
+        </div>
+
+        {groups.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-600">{data.groups.length === 0 ? 'No supported PPE findings were recorded in named work areas for this time window. This does not establish that work areas are safe.' : 'No combinations match this search.'}</div> : <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{groups.map(group => <article key={`${group.work_area}\u0000${group.hazard_type}`} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="break-words text-xs font-bold uppercase tracking-wide text-teal-700">{group.work_area}</p><h4 className="mt-1 text-lg font-bold text-slate-900">{formatHazardType(group.hazard_type)}</h4></div><span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${group.is_repeated ? 'bg-amber-100 text-amber-900' : 'bg-slate-100 text-slate-700'}`}>{group.is_repeated ? 'Repeated' : 'Observed once'}</span></div>
+          <p className="mt-3 text-sm text-slate-700"><strong className="text-xl text-slate-900">{group.observation_count}</strong> distinct supporting observation{group.observation_count === 1 ? '' : 's'}</p>
+          <p className="mt-1 text-xs text-slate-500">{data.window_start || data.window_end ? 'Within the selected observation-time window.' : 'Across all recorded history.'} This count does not indicate assessment severity or accident probability.</p>
+          <button type="button" onClick={() => setSelected(group)} className="mt-4 inline-flex min-h-10 items-center justify-center rounded-lg border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-900 hover:bg-teal-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700">Inspect supporting observations</button>
+        </article>)}</div>}
       </section>
-      <p className="text-xs text-slate-500">{data.work_area_note} Names keep their spelling and case. Counts describe recorded observations, not workers, accidents, or risk scores. Rejected exact-image retries add no observation. This view does not change assessments or alerts.</p>
+      <p className="text-xs text-slate-500">{data.work_area_note} Reassessments and multiple detections in one observation do not increase recurrence. Work-area spelling and case remain distinct after trimming surrounding whitespace. Unknown-area placeholders are excluded. Recurrence does not identify workers or establish individual behavior.</p>
     </>}
-  </div>;
+    {selected && <ZoneObservationDrawer area={selected.work_area} hazardType={selected.hazard_type} areaMode="recurrence" window={selectedWindow} onClose={() => setSelected(null)} expectedObservationCount={selected.observation_count} />}
+  </main>;
 }
 
 function Stat({ icon: Icon, label, value, detail }: { icon: typeof MapPinned; label: string; value: number; detail: string }) {
-  return <div className="panel p-5"><div className="flex justify-between gap-3"><span className="text-sm font-semibold text-slate-500">{label}</span><Icon size={18} className="text-teal-600 shrink-0" /></div><p className="text-2xl font-bold mt-5">{value}</p><p className="text-xs text-slate-500 mt-1">{detail}</p></div>;
+  return <article className="panel min-w-0 p-4 sm:p-5"><div className="flex items-start justify-between gap-2"><span className="text-sm font-semibold text-slate-600">{label}</span><Icon size={18} className="shrink-0 text-teal-700" /></div><p className="mt-4 text-2xl font-bold text-slate-900">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></article>;
 }

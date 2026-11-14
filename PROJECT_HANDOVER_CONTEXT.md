@@ -1319,3 +1319,29 @@ docs/phase-8-3b-zone-analytics.md.
 #### Phase 8.3B final connected sign-off attempt - 2026-11-14
 
 The supplied integrated-browser handle was unavailable (`Page ... not found`), and opening a fresh integrated-browser page at `http://127.0.0.1:5173` failed. The actual shared browser URL/authentication state and login result could not be determined. No login retry, service restart, credentials/token access, or data mutation occurred. Connected Zone Analytics verification and read-only before/after snapshots remain outstanding; do not mark Phase 8.3B connected sign-off complete. See `docs/phase-8-3b-zone-analytics.md` for the manual verification checklist.
+
+### Phase 8.3C — Evidence-linked Recurrence Analytics — 2026-11-14
+
+The recurrence page now provides searchable/sortable area/category group cards
+with distinct-observation counts and selection into the shared Zone supporting-
+observation drawer. `GET /analytics/work-area-recurrence` and the established
+recurrence rules are unchanged. The drawer uses the authenticated
+`GET /analytics/finding-observations` contract with `area_mode=recurrence`,
+matching area/category and the same half-open observation-time bounds; it
+reuses thumbnails, evidence previews, observation-level risk, assessment
+history and Safety Incidents/Safety Case links. Frequency is explicitly
+separated from risk and does not identify workers or imply accident probability.
+
+Focused analytics tests passed (27 total); the full isolated backend suite
+passed 227 tests with 9 PostgreSQL integration tests skipped because no
+disposable test database URL is configured. Frontend build passed; lint passed
+with five existing warnings in unchanged files. The integrated browser showed
+`chrome-error://chromewebdata/`; no authenticated connected checks were
+possible and no login or server restart was attempted. No saved records or
+evidence were modified. Phase 8.3D remains responsible for combined
+Zone/Recurrence connected verification and sign-off. See
+`docs/phase-8-3c-recurrence-analytics.md`.
+
+#### Phase 8.3D final integration audit — 2026-11-14
+
+Zone and Recurrence metric definitions and shared supporting-observation contracts passed static source review. The full isolated backend suite passed 227 tests with 9 PostgreSQL tests skipped; 27 focused analytics tests passed. Frontend build and lint passed (five existing warnings), and `git diff --check` passed. Connected verification could not run: the shared browser returned `chrome-error://chromewebdata/` and ports 8000/5173 had no listeners. No service restart, live API snapshot, authenticated UI check, or before/after data comparison was performed. No saved records were intentionally modified. Phase 8.3 is ready only as an automated-verified checkpoint; connected sign-off remains outstanding. See `docs/phase-8-3d-final-verification.md`.

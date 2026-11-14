@@ -154,6 +154,37 @@ class ZoneAnalyticsTests(unittest.TestCase):
         self.assertIn(" DESC", page_sql.upper())
         self.assertEqual(session.execute.call_count, 3)
 
+    def test_recurrence_supporting_page_uses_same_named_area_exclusions(self) -> None:
+        observation = Observation(observation_id="obs-recurrence", observed_at=NOW, source="test", work_area="Zone A")
+        page_result = MagicMock()
+        page_result.all.return_value = [MagicMock(observation_id="obs-recurrence")]
+        detail_result = MagicMock()
+        detail_result.scalars.return_value.all.return_value = [observation]
+        matches = MagicMock()
+        matches.all.return_value = [("obs-recurrence", 12)]
+        session = MagicMock()
+        session.scalar.side_effect = [1, 1]
+        session.execute.side_effect = [page_result, detail_result, matches]
+
+        result = get_finding_observation_page(
+            session, work_area="Zone A", hazard_type="missing_safety_helmet",
+            start=NOW, end=NOW.replace(day=16), area_mode="recurrence", sort="oldest", limit=10, offset=0,
+        )
+        page_query = session.execute.call_args_list[0].args[0]
+        compiled = page_query.compile(dialect=postgresql.dialect())
+        sql = str(compiled).lower()
+
+        self.assertEqual(result["total_observations"], 1)
+        self.assertEqual([item.observation_id for item, _ in result["items"]], ["obs-recurrence"])
+        self.assertIn("not (observations.work_area is null", sql)
+        self.assertIn("lower(trim(observations.work_area)) in", sql)
+        self.assertIn("trim(observations.work_area) =", sql)
+        parameters = [value for item in compiled.params.values() for value in (item if isinstance(item, list) else [item])]
+        self.assertIn("Zone A", parameters)
+        self.assertIn("unspecified", parameters)
+        self.assertIn("unknown", parameters)
+        self.assertIn("unassigned work area", parameters)
+
     def test_analytics_and_supporting_observation_endpoints_are_authenticated(self) -> None:
         client = TestClient(app)
         self.assertEqual(client.get("/analytics/zones").status_code, 401)
@@ -166,7 +197,7 @@ class ZoneAnalyticsTests(unittest.TestCase):
         app.dependency_overrides[get_current_user] = lambda: object()
         try:
             response = TestClient(app).get(
-                "/analytics/finding-observations?work_area=Zone%20A&hazard_type=missing_safety_helmet&start=2026-03-15T00:00:00Z&end=2026-03-16T00:00:00Z&sort=oldest&limit=5&offset=10"
+                "/analytics/finding-observations?work_area=Zone%20A&hazard_type=missing_safety_helmet&start=2026-03-15T00:00:00Z&end=2026-03-16T00:00:00Z&area_mode=recurrence&sort=oldest&limit=5&offset=10"
             )
             invalid_category = TestClient(app).get("/analytics/finding-observations?hazard_type=unknown")
         finally:
@@ -178,6 +209,7 @@ class ZoneAnalyticsTests(unittest.TestCase):
         query.assert_called_once()
         self.assertEqual(query.call_args.kwargs["work_area"], "Zone A")
         self.assertEqual(query.call_args.kwargs["hazard_type"], "missing_safety_helmet")
+        self.assertEqual(query.call_args.kwargs["area_mode"], "recurrence")
         self.assertEqual(query.call_args.kwargs["sort"], "oldest")
         self.assertEqual(query.call_args.kwargs["limit"], 5)
         self.assertEqual(query.call_args.kwargs["offset"], 10)

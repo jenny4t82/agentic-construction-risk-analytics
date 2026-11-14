@@ -1245,3 +1245,77 @@ example, so these are verified through isolated fixtures only. No observations,
 assessments, alerts, accounts, evidence, or weights were changed. Phase
 8.2A/B/C is ready for checkpoint approval and Phase 8.2 can close after that
 checkpoint. No Git operation beyond inspection was performed.
+
+### Phase 8.3A analytics architecture audit — 2026-11-14
+
+Prepared [`docs/phase-8-3a-analytics-architecture.md`](docs/phase-8-3a-analytics-architecture.md)
+after auditing `backend/app/analytics.py`, analytics routes/contracts in
+`backend/app/main.py`, the Zone and Recurrence pages, navigation/evidence
+clients, model relationships, and focused tests. Current Zone Analytics counts
+supported detected-hazard rows and latest per-finding risk-band buckets;
+its high/low area ranking is violation-row frequency. Alert fields count
+individual alerts attached to included findings, with open included in
+unresolved; there are no separate observation, valid completed-assessment,
+case or dismissed-alert totals. Zone data is full-history and unpaginated.
+
+Recurrence counts distinct observation IDs per `(trimmed named work area,
+canonical PPE hazard type)` pair. It excludes the documented unknown-area
+placeholders, preserves case/internal spelling, uses observation time with
+timezone-aware half-open bounds, and does not depend on risk assessment data or
+`repeated_count`. It returns all group observation IDs without pagination.
+Both services use eager loading instead of N+1 relation reads but aggregate
+unbounded results in application memory.
+
+The design recommends additive Zone date/unit metadata, independently named
+counts, and one shared authenticated paginated finding-to-observation API for
+both analytics pages. That drill-down should reuse Phase 8.1D observation
+risk, current observation/image endpoints, Phase 8.2 safety cases, and the
+existing `#incidents` deep-link helper. Phases 8.3B/C implement Zone and
+Recurrence separately; Phase 8.3D performs read-only connected verification,
+regressions and checkpoint review. Browser remained signed out; no connected
+verification or data mutation was performed. This phase changed documentation
+only; no tests were run, and no Phase 8.3B implementation has begun.
+
+### Phase 8.3B — Evidence-linked Zone Analytics
+
+Implemented additive `GET /analytics/zones?start=&end=` metrics and the authenticated paginated `GET /analytics/finding-observations` contract. The former preserves all legacy response fields and adds explicit distinct observation, finding, latest valid/pending/incomplete assessment, overall observation-risk, provisional, alert lifecycle and safety-case counts. Overall risk reuses Phase 8.1D's authoritative summary; the old per-finding distribution remains explicitly separate. Observation-time filtering is offset-aware and half-open. The shared finding endpoint filters category/area/time and pages unique observations with evidence availability, full assessment lineage, overall risk and optional safety-case ID.
+
+Zone Analytics now has date filters, unit-labelled metrics and comparisons, category drill-down, paginated evidence-linked observations, preview support, and Safety Incidents/Safety Case navigation. `#alerts?observation_id=...` opens the existing case drawer. Recurrence logic/UI remains unchanged. Focused backend tests passed (24); the frontend build/typecheck passed. Full regression results are pending final validation. The integrated browser is signed out at `http://127.0.0.1:5173/#login`, so connected verification is unavailable; no server restart, live data write or authentication attempt was made. See [`docs/phase-8-3b-zone-analytics.md`](docs/phase-8-3b-zone-analytics.md) for the exact contracts and metric definitions.
+
+#### Phase 8.3B final verification — 2026-11-14
+
+Final full isolated backend suite: 226 passed, 9 PostgreSQL integration tests skipped because `TEST_DATABASE_URL` is unavailable. Focused Zone/Recurrence tests: 26 passed. Frontend TypeScript/Vite build passed. Oxlint passed with five warnings in unchanged files (`App.tsx`, `AuthContext.tsx`, `OverviewPage.tsx`, `ObservationHistory.tsx`); no lint warnings were introduced by this phase. There is no configured frontend test script. `git diff --check` passed.
+
+The integrated browser is still signed out at `http://127.0.0.1:5173/#login`, so populated connected verification remains outstanding. No server restart or live data writes were performed. The implementation is ready for authenticated integration review, with connected sign-off pending. The exact API contract is in [`docs/phase-8-3b-zone-analytics.md`](docs/phase-8-3b-zone-analytics.md).
+
+#### Phase 8.3B connected verification attempt — 2026-11-14
+
+The shared browser was confirmed at `http://127.0.0.1:5173/#login` (signed out). No credentials were requested, no services restarted, and no live data was changed. Same-origin requests through the Vite `/analytics` proxy returned FastAPI JSON: zone summary returned 401 without authentication and `finding-observations` returned 404. Live OpenAPI contains only the older zone summary contract (without `start`/`end`) and does not contain the new supporting-observation route. Thus the proxy reaches a backend, but the running backend is stale relative to checkout. Do not claim connected analytics, evidence, navigation, responsive/accessibility, or before/after snapshot verification until the correct backend is loaded and a user-authenticated browser session is available. No connected sign-off yet.
+
+#### Phase 8.3B controlled reload and browser status — 2026-11-14
+
+The stale SafeSite backend from this workspace was verified and replaced once
+with scripts/start_local_backend.ps1. Startup targets safesite_local and
+does not run migrations, reset, seed, or account bootstrap. Health is 200;
+OpenAPI now shows both analytics endpoints and Zone date parameters.
+Unauthenticated calls through the frontend proxy return 401 JSON. However,
+the only shared browser page (ID
+4d12a393-54c1-4ff8-8fed-75d26552ccf3) remains at
+http://127.0.0.1:5173/#login. The asserted authenticated session appears to
+be in another tab/window or browser context that is not shared; its exact
+location is not visible. No authenticated UI verification or observation/alert
+snapshots were completed, so Phase 8.3B connected sign-off remains pending.
+
+#### Phase 8.3B shared-browser limitation — 2026-11-14
+
+The shared controlled SafeSite tab, page ID
+4d12a393-54c1-4ff8-8fed-75d26552ccf3, is still at
+http://127.0.0.1:5173/#login with Login failed and browser HTTP 502 events.
+No repeat sign-in or service restart was attempted. No credentials or tokens
+were recorded. Connected UI verification and before/after data snapshots were
+not completed; Phase 8.3B sign-off remains pending. Manual Chrome steps are in
+docs/phase-8-3b-zone-analytics.md.
+
+#### Phase 8.3B final connected sign-off attempt - 2026-11-14
+
+The supplied integrated-browser handle was unavailable (`Page ... not found`), and opening a fresh integrated-browser page at `http://127.0.0.1:5173` failed. The actual shared browser URL/authentication state and login result could not be determined. No login retry, service restart, credentials/token access, or data mutation occurred. Connected Zone Analytics verification and read-only before/after snapshots remain outstanding; do not mark Phase 8.3B connected sign-off complete. See `docs/phase-8-3b-zone-analytics.md` for the manual verification checklist.

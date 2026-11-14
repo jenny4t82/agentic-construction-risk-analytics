@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .analytics import (
-    SafetyAnalytics, WorkAreaRecurrenceAnalytics, get_safety_analytics,
+    SafetyAnalytics, WorkAreaRecurrenceAnalytics, get_finding_observation_page, get_safety_analytics,
     get_work_area_recurrence, validate_recurrence_window,
 )
 from .auth import (
@@ -395,6 +395,17 @@ class AnalyticsAreaMetric(BaseModel):
     most_common_violation: Optional[AnalyticsViolationMetric] = None
     observation_ids: list[str]
     detected_hazard_ids: list[int]
+    violation_metrics: list[AnalyticsViolationMetric]
+    observation_count: int
+    valid_latest_completed_assessment_count: int
+    pending_latest_assessment_count: int
+    incomplete_latest_assessment_count: int
+    overall_observation_risk_distribution: dict[str, int]
+    provisional_observation_count: int
+    individual_alert_count: int
+    alert_status_counts: dict[str, int]
+    unresolved_individual_alert_count: int
+    safety_case_count: int
 
 
 class SafetyAnalyticsResponse(BaseModel):
@@ -410,11 +421,42 @@ class SafetyAnalyticsResponse(BaseModel):
     open_alert_count: int
     unresolved_alert_count: int
     resolved_alert_count: int
+    unique_observation_count: int
+    valid_latest_completed_assessment_count: int
+    pending_latest_assessment_count: int
+    incomplete_latest_assessment_count: int
+    overall_observation_risk_distribution: dict[str, int]
+    provisional_observation_count: int
+    individual_alert_count: int
+    alert_status_counts: dict[str, int]
+    all_unresolved_alert_count: int
+    safety_case_count: int
+    scope: dict[str, Any]
+    metric_units: dict[str, str]
     zone_identifier_source: str = "work_area"
     zone_identifier_is_validated_entity: bool = False
     zone_identifier_note: str = (
         "work_area is free text used as a temporary zone label; it is not a validated zone entity."
     )
+
+
+class SupportingObservationEvidence(BaseModel):
+    original_available: bool
+    annotated_available: bool
+
+
+class SupportingObservationResponse(ObservationDetailResponse):
+    matching_detected_hazard_ids: list[int]
+    evidence: SupportingObservationEvidence
+    safety_case_id: Optional[str] = None
+
+
+class SupportingObservationListResponse(BaseModel):
+    total_observations: int
+    total_matching_findings: int
+    limit: int
+    offset: int
+    items: list[SupportingObservationResponse]
 
 
 class WorkAreaRecurrenceGroupResponse(BaseModel):
@@ -592,15 +634,7 @@ def _alert_response(alert: Alert) -> AlertDetailResponse:
 def _safety_case_response(observation: Observation, alerts: list[Alert]) -> SafetyCaseResponse:
     """Build a virtual case without changing any alert or observation row."""
     detail = ObservationDetailResponse.model_validate(observation, from_attributes=True)
-    image_metadata = (observation.raw_metadata or {}).get("image")
-    evidence = {}
-    for variant in ("original", "annotated"):
-        try:
-            get_observation_image_path(observation.observation_id, variant, image_metadata)
-            available = True
-        except (FileNotFoundError, ValueError):
-            available = False
-        evidence[f"{variant}_available"] = available
+    evidence = _observation_evidence(observation)
 
     child_responses = [_alert_response(alert) for alert in alerts]
     corrections = (observation.raw_metadata or {}).get("assessment_corrections", [])
@@ -628,6 +662,19 @@ def _safety_case_response(observation: Observation, alerts: list[Alert]) -> Safe
     )
 
 
+def _observation_evidence(observation: Observation) -> dict[str, bool]:
+    image_metadata = (observation.raw_metadata or {}).get("image")
+    evidence = {}
+    for variant in ("original", "annotated"):
+        try:
+            get_observation_image_path(observation.observation_id, variant, image_metadata)
+            available = True
+        except (FileNotFoundError, ValueError):
+            available = False
+        evidence[f"{variant}_available"] = available
+    return evidence
+
+
 def _analytics_metric_response(metric: Any) -> AnalyticsViolationMetric:
     return AnalyticsViolationMetric(
         violation_type=metric.violation_type,
@@ -648,10 +695,21 @@ def _analytics_area_response(metric: Any) -> AnalyticsAreaMetric:
         ),
         observation_ids=list(metric.observation_ids),
         detected_hazard_ids=list(metric.detected_hazard_ids),
+        violation_metrics=[_analytics_metric_response(item) for item in metric.violation_metrics],
+        observation_count=metric.observation_count,
+        valid_latest_completed_assessment_count=metric.valid_latest_completed_assessment_count,
+        pending_latest_assessment_count=metric.pending_latest_assessment_count,
+        incomplete_latest_assessment_count=metric.incomplete_latest_assessment_count,
+        overall_observation_risk_distribution=metric.overall_observation_risk_distribution,
+        provisional_observation_count=metric.provisional_observation_count,
+        individual_alert_count=metric.individual_alert_count,
+        alert_status_counts=metric.alert_status_counts,
+        unresolved_individual_alert_count=metric.unresolved_individual_alert_count,
+        safety_case_count=metric.safety_case_count,
     )
 
 
-def _safety_analytics_response(analytics: SafetyAnalytics) -> SafetyAnalyticsResponse:
+def _safety_analytics_response(analytics: SafetyAnalytics, *, start: datetime | None = None, end: datetime | None = None) -> SafetyAnalyticsResponse:
     return SafetyAnalyticsResponse(
         total_violations=analytics.total_violations,
         violations_by_work_area=[
@@ -681,6 +739,26 @@ def _safety_analytics_response(analytics: SafetyAnalytics) -> SafetyAnalyticsRes
         open_alert_count=analytics.open_alert_count,
         unresolved_alert_count=analytics.unresolved_alert_count,
         resolved_alert_count=analytics.resolved_alert_count,
+        unique_observation_count=analytics.unique_observation_count,
+        valid_latest_completed_assessment_count=analytics.valid_latest_completed_assessment_count,
+        pending_latest_assessment_count=analytics.pending_latest_assessment_count,
+        incomplete_latest_assessment_count=analytics.incomplete_latest_assessment_count,
+        overall_observation_risk_distribution=analytics.overall_observation_risk_distribution,
+        provisional_observation_count=analytics.provisional_observation_count,
+        individual_alert_count=analytics.individual_alert_count,
+        alert_status_counts=analytics.alert_status_counts,
+        all_unresolved_alert_count=analytics.all_unresolved_alert_count,
+        safety_case_count=analytics.safety_case_count,
+        scope={"start": start, "end": end, "interval": "[start,end)"},
+        metric_units={
+            "observations": "distinct observation_id with at least one supported detected hazard",
+            "detected_hazards": "supported detected_hazard_id",
+            "latest_assessments": "one effective assessment per supported detected_hazard_id",
+            "alerts": "individual alert_id on observations with at least one supported finding",
+            "safety_cases": "distinct observation_id with at least one persisted alert",
+            "risk_level_distribution": "supported detected-hazard rows using latest stored completed band (legacy)",
+            "overall_observation_risk_distribution": "distinct observation_id classified by Phase 8.1D maximum valid latest score",
+        },
     )
 
 
@@ -786,6 +864,8 @@ def set_user_role(
 
 @app.get("/analytics/zones", response_model=SafetyAnalyticsResponse, dependencies=[Depends(get_current_user)])
 def get_zone_analytics(
+    start: Optional[datetime] = Query(default=None),
+    end: Optional[datetime] = Query(default=None),
     db: Optional[Session] = Depends(get_db),
 ) -> SafetyAnalyticsResponse:
     """Return zone-level safety analytics from persisted violation records.
@@ -794,14 +874,54 @@ def get_zone_analytics(
     temporary, free-text zone identifier and is not validated or canonicalized.
     """
 
+    try:
+        start, end = validate_recurrence_window(start, end)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     if db is None:
         raise HTTPException(status_code=503, detail="Database is not configured")
     try:
-        return _safety_analytics_response(get_safety_analytics(db))
+        return _safety_analytics_response(get_safety_analytics(db, start=start, end=end), start=start, end=end)
     except SQLAlchemyError as error:
         raise HTTPException(
             status_code=500, detail="Failed to calculate zone analytics"
         ) from error
+
+
+@app.get("/analytics/finding-observations", response_model=SupportingObservationListResponse,
+         dependencies=[Depends(get_current_user)])
+def get_finding_observations(
+    work_area: Optional[str] = Query(default=None, min_length=1),
+    hazard_type: Optional[str] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    area_mode: Literal["zone", "recurrence"] = "zone",
+    sort: Literal["newest", "oldest"] = "newest",
+    limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+    db: Optional[Session] = Depends(get_db),
+) -> SupportingObservationListResponse:
+    if hazard_type is not None and hazard_type not in set(LABEL_TO_HAZARD.values()):
+        raise HTTPException(status_code=422, detail="Unsupported PPE hazard category")
+    try:
+        start, end = validate_recurrence_window(start, end)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    try:
+        result = get_finding_observation_page(db, work_area=work_area, hazard_type=hazard_type,
+            start=start, end=end, area_mode=area_mode, sort=sort, limit=limit, offset=offset)
+        items = []
+        for observation, hazard_ids in result["items"]:
+            detail = ObservationDetailResponse.model_validate(observation, from_attributes=True).model_dump()
+            items.append(SupportingObservationResponse(
+                **detail, matching_detected_hazard_ids=hazard_ids,
+                evidence=SupportingObservationEvidence(**_observation_evidence(observation)),
+                safety_case_id=f"observation:{observation.observation_id}" if observation.alerts else None,
+            ))
+        return SupportingObservationListResponse(**{**result, "items": items})
+    except SQLAlchemyError as error:
+        raise HTTPException(status_code=500, detail="Failed to query supporting observations") from error
 
 
 @app.get(

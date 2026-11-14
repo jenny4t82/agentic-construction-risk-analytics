@@ -338,6 +338,17 @@ export interface AnalyticsAreaMetric {
   most_common_violation?: AnalyticsViolationMetric | null;
   observation_ids: string[];
   detected_hazard_ids: number[];
+  violation_metrics: AnalyticsViolationMetric[];
+  observation_count: number;
+  valid_latest_completed_assessment_count: number;
+  pending_latest_assessment_count: number;
+  incomplete_latest_assessment_count: number;
+  overall_observation_risk_distribution: Record<string, number>;
+  provisional_observation_count: number;
+  individual_alert_count: number;
+  alert_status_counts: Record<'open' | 'acknowledged' | 'resolved' | 'dismissed', number>;
+  unresolved_individual_alert_count: number;
+  safety_case_count: number;
 }
 
 export interface SafetyAnalyticsResponse {
@@ -351,9 +362,46 @@ export interface SafetyAnalyticsResponse {
   open_alert_count: number;
   unresolved_alert_count: number;
   resolved_alert_count: number;
+  unique_observation_count: number;
+  valid_latest_completed_assessment_count: number;
+  pending_latest_assessment_count: number;
+  incomplete_latest_assessment_count: number;
+  overall_observation_risk_distribution: Record<string, number>;
+  provisional_observation_count: number;
+  individual_alert_count: number;
+  alert_status_counts: Record<'open' | 'acknowledged' | 'resolved' | 'dismissed', number>;
+  all_unresolved_alert_count: number;
+  safety_case_count: number;
+  scope: { start: string | null; end: string | null; interval: '[start,end)' };
+  metric_units: Record<string, string>;
   zone_identifier_source: string;
   zone_identifier_is_validated_entity: boolean;
   zone_identifier_note: string;
+}
+
+export interface FindingObservationItem extends ObservationDetailResponse {
+  matching_detected_hazard_ids: number[];
+  evidence: { original_available: boolean; annotated_available: boolean };
+  safety_case_id: string | null;
+}
+
+export interface FindingObservationListResponse {
+  total_observations: number;
+  total_matching_findings: number;
+  limit: number;
+  offset: number;
+  items: FindingObservationItem[];
+}
+
+export interface FindingObservationFilters {
+  work_area?: string;
+  hazard_type?: string;
+  start?: string;
+  end?: string;
+  area_mode?: 'zone' | 'recurrence';
+  sort?: 'newest' | 'oldest';
+  limit?: number;
+  offset?: number;
 }
 
 export interface WorkAreaRecurrenceGroup {

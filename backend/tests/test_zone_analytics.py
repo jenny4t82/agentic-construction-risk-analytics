@@ -12,11 +12,14 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).parents[1]))
 os.environ["DATABASE_URL"] = ""
 
-from app.analytics import get_safety_analytics, summarize_violation_records
+from app.analytics import get_finding_observation_page, get_safety_analytics, summarize_violation_records
+from app.analytics import validate_recurrence_window
 from app.database import get_db
 from app.db_models import Alert, DetectedHazardRecord, Observation, RiskAssessment
 from app.main import app
 from app.auth import get_current_user
+from app.scoring import risk_band
+from sqlalchemy.dialects import postgresql
 
 
 NOW = datetime(2026, 3, 15, tzinfo=timezone.utc)
@@ -70,6 +73,115 @@ def make_record(
 
 
 class ZoneAnalyticsTests(unittest.TestCase):
+    def test_distinct_observations_latest_assessments_and_alert_units(self) -> None:
+        observation = Observation(observation_id="shared", observed_at=NOW, source="test", work_area="Zone A")
+        helmet = make_record(10, "shared", "Zone A", "no_helmet", "High", "open")
+        vest = make_record(11, "shared", "Zone A", "no_vest", None, "dismissed")
+        helmet.observation = observation
+        vest.observation = observation
+        observation.detected_hazards = [helmet, vest]
+        helmet.assessments = [
+            RiskAssessment(assessment_id=1001, assessment_version=1, status="completed", risk_score=35, risk_band="Low"),
+            RiskAssessment(assessment_id=1002, assessment_version=2, status="completed", risk_score=60, risk_band="incorrect historical band"),
+        ]
+        result = summarize_violation_records([helmet, vest])
+        area = result.violations_by_work_area[0]
+
+        self.assertEqual(result.total_violations, 2)
+        self.assertEqual(result.unique_observation_count, 1)
+        self.assertEqual(area.observation_count, 1)
+        self.assertEqual(result.valid_latest_completed_assessment_count, 1)
+        self.assertEqual(result.pending_latest_assessment_count, 1)
+        self.assertEqual(result.provisional_observation_count, 1)
+        self.assertEqual(result.overall_observation_risk_distribution[risk_band(60)], 1)
+        self.assertEqual(result.individual_alert_count, 2)
+        self.assertEqual(result.alert_status_counts["open"], 1)
+        self.assertEqual(result.alert_status_counts["dismissed"], 1)
+        self.assertEqual(result.safety_case_count, 1)
+        self.assertEqual(len(area.violation_metrics), 2)
+
+    def test_latest_missing_or_malformed_assessment_is_incomplete_not_a_score(self) -> None:
+        record = make_record(20, "obs-invalid", "Zone A", "no_helmet", "High", "open")
+        record.assessments = [
+            RiskAssessment(assessment_id=2001, assessment_version=1, status="completed", risk_score=70, risk_band="High"),
+            RiskAssessment(assessment_id=2002, assessment_version=2, status="completed", risk_score=None, risk_band="High"),
+        ]
+        result = summarize_violation_records([record])
+        self.assertEqual(result.valid_latest_completed_assessment_count, 0)
+        self.assertEqual(result.incomplete_latest_assessment_count, 1)
+        self.assertEqual(result.overall_observation_risk_distribution["High"], 0)
+
+    def test_zone_window_uses_timezone_aware_half_open_bounds(self) -> None:
+        start = datetime(2026, 3, 15, 5, tzinfo=timezone.utc)
+        end = datetime(2026, 3, 16, 5, tzinfo=timezone.utc)
+        normalized = validate_recurrence_window(start, end)
+        self.assertEqual(normalized, (start, end))
+        with self.assertRaises(ValueError):
+            validate_recurrence_window(datetime(2026, 3, 15), end)
+        with self.assertRaises(ValueError):
+            validate_recurrence_window(end, start)
+
+    def test_supporting_observation_page_deduplicates_and_uses_stable_pagination(self) -> None:
+        first = Observation(observation_id="obs-new", observed_at=NOW, source="test", work_area="Zone A")
+        second = Observation(observation_id="obs-old", observed_at=NOW, source="test", work_area="Zone A")
+        page_result = MagicMock()
+        page_result.all.return_value = [MagicMock(observation_id="obs-new"), MagicMock(observation_id="obs-old")]
+        detail_result = MagicMock()
+        detail_result.scalars.return_value.all.return_value = [first, second]
+        matches = MagicMock()
+        matches.all.return_value = [("obs-new", 12), ("obs-new", 13), ("obs-old", 14)]
+        session = MagicMock()
+        session.scalar.side_effect = [2, 3]
+        session.execute.side_effect = [page_result, detail_result, matches]
+
+        result = get_finding_observation_page(
+            session, work_area="Zone A", hazard_type="missing_safety_helmet",
+            start=NOW, end=NOW.replace(day=16), sort="newest", limit=2, offset=4,
+        )
+        page_compiled = session.execute.call_args_list[0].args[0].compile(dialect=postgresql.dialect())
+        page_sql = str(page_compiled)
+        self.assertEqual(result["total_observations"], 2)
+        self.assertEqual(result["total_matching_findings"], 3)
+        self.assertEqual([item[0].observation_id for item in result["items"]], ["obs-new", "obs-old"])
+        self.assertEqual(result["items"][0][1], [12, 13])
+        self.assertIn("OFFSET", page_sql.upper())
+        self.assertIn("LIMIT", page_sql.upper())
+        self.assertIn("missing_safety_helmet", page_compiled.params.values())
+        self.assertIn("no_helmet", page_compiled.params.values())
+        self.assertIn("Zone A", page_compiled.params.values())
+        self.assertIn(NOW, page_compiled.params.values())
+        self.assertIn(NOW.replace(day=16), page_compiled.params.values())
+        self.assertIn(" DESC", page_sql.upper())
+        self.assertEqual(session.execute.call_count, 3)
+
+    def test_analytics_and_supporting_observation_endpoints_are_authenticated(self) -> None:
+        client = TestClient(app)
+        self.assertEqual(client.get("/analytics/zones").status_code, 401)
+        self.assertEqual(client.get("/analytics/finding-observations").status_code, 401)
+
+    @patch("app.main.get_finding_observation_page")
+    def test_supporting_observation_api_forwards_filters_and_returns_empty_totals(self, query: MagicMock) -> None:
+        query.return_value = {"items": [], "total_observations": 0, "total_matching_findings": 0, "limit": 5, "offset": 10}
+        app.dependency_overrides[get_db] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: object()
+        try:
+            response = TestClient(app).get(
+                "/analytics/finding-observations?work_area=Zone%20A&hazard_type=missing_safety_helmet&start=2026-03-15T00:00:00Z&end=2026-03-16T00:00:00Z&sort=oldest&limit=5&offset=10"
+            )
+            invalid_category = TestClient(app).get("/analytics/finding-observations?hazard_type=unknown")
+        finally:
+            app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total_observations"], 0)
+        self.assertEqual(response.json()["items"], [])
+        self.assertEqual(invalid_category.status_code, 422)
+        query.assert_called_once()
+        self.assertEqual(query.call_args.kwargs["work_area"], "Zone A")
+        self.assertEqual(query.call_args.kwargs["hazard_type"], "missing_safety_helmet")
+        self.assertEqual(query.call_args.kwargs["sort"], "oldest")
+        self.assertEqual(query.call_args.kwargs["limit"], 5)
+        self.assertEqual(query.call_args.kwargs["offset"], 10)
+
     def test_multiple_areas_highest_lowest_and_common_violations(self) -> None:
         records = [
             make_record(1, "obs-1", "Zone A", "no_helmet", "High", "open"),
@@ -108,6 +220,7 @@ class ZoneAnalyticsTests(unittest.TestCase):
         self.assertEqual(result.open_alert_count, 2)
         self.assertEqual(result.unresolved_alert_count, 3)
         self.assertEqual(result.resolved_alert_count, 2)
+        self.assertEqual(result.alert_status_counts, {"open": 2, "acknowledged": 1, "resolved": 2, "dismissed": 0})
 
     def test_empty_database_returns_safe_empty_snapshot(self) -> None:
         result = summarize_violation_records([])
@@ -119,6 +232,18 @@ class ZoneAnalyticsTests(unittest.TestCase):
         self.assertIsNone(result.most_common_violation)
         self.assertEqual(result.risk_level_distribution, {level: 0 for level in ("Low", "Moderate", "High", "Critical", "pending")})
         self.assertEqual(result.unresolved_alert_count, 0)
+
+    def test_unknown_work_areas_stay_in_the_explicit_unspecified_bucket(self) -> None:
+        result = summarize_violation_records([
+            make_record(30, "unknown-1", None, "no_helmet", None, "open"),
+            make_record(31, "unknown-2", "  ", "no_vest", None, "resolved"),
+            make_record(32, "unknown-3", " UNKNOWN ", "no_mask", None, "dismissed"),
+            make_record(33, "named-1", "Zone A", "no_boots", None, "acknowledged"),
+        ])
+        areas = {item.work_area: item for item in result.violations_by_work_area}
+        self.assertEqual(areas["Unspecified"].observation_count, 3)
+        self.assertEqual(areas["Unspecified"].violation_count, 3)
+        self.assertEqual(areas["Zone A"].observation_count, 1)
 
     def test_database_query_path_loads_records_before_summarizing(self) -> None:
         record = make_record(1, "obs-1", "Zone A", "no_helmet", "High", "open")

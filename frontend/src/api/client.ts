@@ -11,6 +11,8 @@ import type {
   ObservationDetailResponse,
   PendingAssessmentContext,
   SafetyAnalyticsResponse,
+  FindingObservationFilters,
+  FindingObservationListResponse,
   SafetyCaseFilters,
   SafetyCaseListResponse,
   SafetyCaseResponse,
@@ -319,10 +321,20 @@ export async function updateAlertStatus(
   return await res.json() as AlertDetailResponse;
 }
 
-export async function fetchZoneAnalytics(): Promise<SafetyAnalyticsResponse> {
-  const res = await apiFetch('/analytics/zones');
+export async function fetchZoneAnalytics(filters: Pick<FindingObservationFilters, 'start' | 'end'> = {}): Promise<SafetyAnalyticsResponse> {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => { if (value !== undefined) query.set(key, String(value)); });
+  const res = await apiFetch(`/analytics/zones${query.size ? `?${query}` : ''}`);
   if (!res.ok) throw new ApiError(res.status, await parseError(res, 'Failed to load zone analytics'));
   return await res.json() as SafetyAnalyticsResponse;
+}
+
+export async function fetchFindingObservations(filters: FindingObservationFilters = {}): Promise<FindingObservationListResponse> {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => { if (value !== undefined) query.set(key, String(value)); });
+  const res = await apiFetch(`/analytics/finding-observations${query.size ? `?${query}` : ''}`);
+  if (!res.ok) throw new ApiError(res.status, await parseError(res, 'Failed to load supporting observations'));
+  return await res.json() as FindingObservationListResponse;
 }
 
 export async function fetchWorkAreaRecurrence(start?: string, end?: string): Promise<WorkAreaRecurrenceResponse> {

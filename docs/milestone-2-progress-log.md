@@ -581,3 +581,65 @@ required and `mixed_closed` live examples remain unavailable, with isolated
 tests covering those conditions. Phase 8.2A/B/C is ready for checkpoint
 approval; Phase 8.2 can close after that checkpoint. Nothing was staged or
 committed.
+
+### Phase 8.3A Zone and Recurrence Analytics architecture audit — 2026-11-14
+
+Audited the existing Zone Analytics and Recurrence Analytics services, APIs,
+UI, persistence relationships and tests on `revamp/milestone-2` at checkpoint
+`4833343a8228b55628fd4ad6ee7ee7adea1da99d`. Added
+[`phase-8-3a-analytics-architecture.md`](phase-8-3a-analytics-architecture.md)
+with current metric denominators, recurrence normalization/date semantics,
+confirmed limitations, reusable contracts/components, additive API proposals,
+and scoped plans/tests for Phases 8.3B, 8.3C and 8.3D.
+
+No application code, schema, persisted data, evidence, risk policy, alerts,
+models or Git history were changed. The browser was signed out, so no connected
+live-data verification is claimed. No tests were run because this phase made
+documentation-only changes; `git diff --check` was used as the documentation
+validation. Phase 8.3B/C implementation has not started.
+
+### Phase 8.3B evidence-linked Zone Analytics implementation — 2026-11-14
+
+Implemented the additive timezone-aware `GET /analytics/zones?start=&end=` summary contract and authenticated paginated `GET /analytics/finding-observations` contract. Legacy zone metrics and their meanings remain intact. New explicit fields distinguish supported finding rows, distinct observations, valid latest assessments, Pending/incomplete latest assessments, Phase 8.1D overall risk distribution/provisional state, individual alert IDs/statuses, and unique observation safety-case counts. The common assessment helper classifies latest scores with the existing risk policy; it does not change scoring.
+
+Replaced the summary-only Zone page with date controls, frequency-labelled work area comparisons, separate per-finding and observation risk summaries, metric units, category drill-down, paginated observation cards, thumbnails/evidence viewer, and Safety Incidents/case links. The existing Safety Case Register now opens `#alerts?observation_id=...` targets while preserving ordinary `#alerts`. Recurrence calculation and UI were not modified.
+
+Focused zone/recurrence tests passed (24). Full isolated backend suite, frontend build/typecheck/lint and `git diff --check` results are to be recorded after final validation. The integrated browser was on the login page at `http://127.0.0.1:5173/#login`; populated connected UI checks were therefore unavailable and no server restart, authentication attempt, or data write was made. Existing `safesite_local`/`safesite_demo` records, images, alerts, assessments, risk policy, model weights and baseline references were not modified by this implementation.
+
+#### Phase 8.3B final verification update — 2026-11-14
+
+The final full isolated backend suite completed successfully: 226 tests passed and 9 PostgreSQL integration tests skipped because `TEST_DATABASE_URL` is not configured. Focused Zone/Recurrence tests passed (26). Frontend TypeScript/Vite build passed. Oxlint passed with five warnings in unchanged files (`App.tsx`, `AuthContext.tsx`, `OverviewPage.tsx`, and `ObservationHistory.tsx`); the new/changed Zone components and Alert Register integration introduced no lint warnings. No frontend test script is configured. `git diff --check` passed.
+
+The integrated browser remains at `http://127.0.0.1:5173/#login`. Since it is signed out, the populated connected UI checks (metrics, date controls, drawer focus behavior, images, and responsive viewport review) remain unverified. No server was restarted and no sign-in attempt or live API/data mutation was made. Phase 8.3B is ready for authenticated integration review; connected sign-off remains outstanding.
+
+#### Phase 8.3B connected verification attempt — 2026-11-14
+
+The shared browser origin `http://127.0.0.1:5173` was at `#login`, so the authenticated page checks and read-only before/after data snapshots could not be completed. No sign-in attempt, server restart, or data mutation was made. Unauthenticated same-origin probes returned JSON through Vite's `/analytics` proxy: `/analytics/zones` returned 401 (route reached FastAPI) and `/analytics/finding-observations` returned 404. Live OpenAPI lists the old `/analytics/zones` operation without the new date parameters and omits the supporting-observation route, confirming a runtime/source mismatch. Browser proxy did not return HTML. Connected metric, evidence, navigation, responsive, accessibility, and preservation checks remain unverified; Phase 8.3B connected sign-off is pending a correctly loaded backend and authenticated browser.
+
+#### Phase 8.3B backend reload and sign-off attempt — 2026-11-14
+
+The identified stale backend process was confirmed to be this workspace's
+SafeSite Uvicorn process and replaced using the approved local startup script.
+The script targets safesite_local without migration, reset, seeding, or
+bootstrap. Health returned 200; OpenAPI exposes both new analytics routes and
+the zone start/end parameters. Unauthenticated requests through FastAPI and
+the Vite proxy return 401 JSON. The shared browser page
+4d12a393-54c1-4ff8-8fed-75d26552ccf3 remains at
+http://127.0.0.1:5173/#login; no other authenticated browser page is shared.
+Authenticated UI checks and before/after data snapshots were not taken.
+Connected sign-off remains blocked; no saved data was modified.
+
+#### Phase 8.3B shared browser status — 2026-11-14
+
+The controlled page (ID 4d12a393-54c1-4ff8-8fed-75d26552ccf3) remains at
+http://127.0.0.1:5173/#login and shows Login failed; recent browser requests
+returned 502. No login retry, service restart, or data mutation was performed.
+Authenticated UI checks and before/after observation/alert snapshots remain
+unavailable, so connected sign-off is still pending. A manual Chrome checklist
+is recorded in docs/phase-8-3b-zone-analytics.md.
+
+#### Phase 8.3B final connected sign-off attempt - 2026-11-14
+
+The integrated-browser page handle supplied for `http://127.0.0.1:5173` (`4d12a393-54c1-4ff8-8fed-75d26552ccf3`) was unavailable to the browser tool (`Page ... not found`). Opening the same origin in a new integrated-browser page also failed. Therefore the current page URL, authentication state, and login-request result could not be inspected; this attempt does not establish that login failed or that the authenticated browser is in a different context. No login was submitted, no service was restarted, and no credentials or tokens were accessed. Authenticated API snapshots and Zone Analytics UI checks could not be performed, so connected sign-off remains outstanding.
+
+Manual read-only checklist: share the active authenticated tab at `http://127.0.0.1:5173` in the integrated browser (same host and port). Compare Zone Analytics totals with `GET /analytics/zones?start=<inclusive>&end=<exclusive>` and supporting-observation items/totals with `GET /analytics/finding-observations`. Check distinct-observation paging, date filters/Clear Filters, finding versus overall risk, Pending/provisional state, evidence previews, `#incidents` and `#alerts?observation_id=...` navigation, keyboard Escape/focus restoration, and 390px/768px/1280px layouts. Capture read-only observation/assessment-history and alert-status/timestamp snapshots before and after; do not submit assessment or alert actions.

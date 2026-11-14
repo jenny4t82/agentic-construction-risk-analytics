@@ -20,25 +20,19 @@ def overall_risk_summary(observation):
     incomplete_count = 0
     hazards = list(observation.detected_hazards or [])
     for hazard in hazards:
-        latest = max(hazard.assessments or [], key=lambda item: item.assessment_version, default=None)
-        if latest is None:
+        result = latest_assessment_result(hazard)
+        if result["status"] == "missing":
             incomplete_count += 1
             continue
-        if latest.status == "pending":
+        if result["status"] == "pending":
             pending_count += 1
             continue
-        if latest.status == "completed":
+        if result["completed_status"]:
             completed_count += 1
-        score = latest.risk_score
-        if latest.status != "completed" or isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 100:
+        if result["status"] != "completed":
             incomplete_count += 1
             continue
-        try:
-            band = risk_band(score)
-        except ValueError:
-            incomplete_count += 1
-            continue
-        completed_scores.append((score, band))
+        completed_scores.append((result["risk_score"], result["risk_band"]))
 
     highest = max(completed_scores, key=lambda item: item[0], default=None)
     provisional = highest is not None and (pending_count > 0 or incomplete_count > 0)
@@ -62,6 +56,30 @@ def overall_risk_summary(observation):
         "incomplete_assessment_count": incomplete_count,
         "total_assessed_findings": len(hazards),
     }
+
+
+def latest_assessment_result(hazard):
+    """Return the authoritative state for a finding's latest assessment.
+
+    A numeric score is accepted only when it is a real integer in the existing
+    1..100 range. Its classification always comes from ``risk_band``; stored
+    band text is not treated as a second source of truth.
+    """
+    latest = max(hazard.assessments or [], key=lambda item: item.assessment_version, default=None)
+    if latest is None:
+        return {"status": "missing", "completed_status": False, "risk_score": None, "risk_band": None}
+    if latest.status == "pending":
+        return {"status": "pending", "completed_status": False, "risk_score": None, "risk_band": None}
+    if latest.status != "completed":
+        return {"status": "incomplete", "completed_status": False, "risk_score": None, "risk_band": None}
+    score = latest.risk_score
+    if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 100:
+        return {"status": "incomplete", "completed_status": True, "risk_score": None, "risk_band": None}
+    try:
+        band = risk_band(score)
+    except ValueError:
+        return {"status": "incomplete", "completed_status": True, "risk_score": None, "risk_band": None}
+    return {"status": "completed", "completed_status": True, "risk_score": score, "risk_band": band}
 
 
 def summarize(observation):

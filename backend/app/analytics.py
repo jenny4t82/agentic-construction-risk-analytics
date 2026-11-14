@@ -9,10 +9,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from .db_models import Alert, DetectedHazardRecord, Observation
+from .db_models import DetectedHazardRecord, Observation
+from .assessment_queries import latest_assessment_result, overall_risk_summary
 from .risk_agent import LABEL_TO_HAZARD
 
 
@@ -36,6 +37,17 @@ class AreaMetric:
     most_common_violation: Optional[ViolationMetric]
     observation_ids: tuple[str, ...]
     detected_hazard_ids: tuple[int, ...]
+    violation_metrics: tuple[ViolationMetric, ...]
+    observation_count: int
+    valid_latest_completed_assessment_count: int
+    pending_latest_assessment_count: int
+    incomplete_latest_assessment_count: int
+    overall_observation_risk_distribution: dict[str, int]
+    provisional_observation_count: int
+    individual_alert_count: int
+    alert_status_counts: dict[str, int]
+    unresolved_individual_alert_count: int
+    safety_case_count: int
 
 
 @dataclass(frozen=True)
@@ -50,6 +62,16 @@ class SafetyAnalytics:
     open_alert_count: int
     unresolved_alert_count: int
     resolved_alert_count: int
+    unique_observation_count: int
+    valid_latest_completed_assessment_count: int
+    pending_latest_assessment_count: int
+    incomplete_latest_assessment_count: int
+    overall_observation_risk_distribution: dict[str, int]
+    provisional_observation_count: int
+    individual_alert_count: int
+    alert_status_counts: dict[str, int]
+    all_unresolved_alert_count: int
+    safety_case_count: int
 
 
 @dataclass(frozen=True)
@@ -188,7 +210,9 @@ def get_work_area_recurrence(
     return summarize_work_area_recurrence(records, start=start, end=end)
 
 
-def load_violation_records(session: Session) -> list[DetectedHazardRecord]:
+def load_violation_records(
+    session: Session, *, start: datetime | None = None, end: datetime | None = None,
+) -> list[DetectedHazardRecord]:
     """Load supported persisted violation events and their evidence lineage."""
 
     statement = (
@@ -197,11 +221,16 @@ def load_violation_records(session: Session) -> list[DetectedHazardRecord]:
         .where(DetectedHazardRecord.source_label.in_(SUPPORTED_VIOLATION_LABELS))
         .order_by(DetectedHazardRecord.detected_hazard_id)
         .options(
-            selectinload(DetectedHazardRecord.observation),
+            selectinload(DetectedHazardRecord.observation).selectinload(Observation.detected_hazards).selectinload(DetectedHazardRecord.assessments),
+            selectinload(DetectedHazardRecord.observation).selectinload(Observation.alerts),
             selectinload(DetectedHazardRecord.assessments),
             selectinload(DetectedHazardRecord.alerts),
         )
     )
+    if start is not None:
+        statement = statement.where(Observation.observed_at >= start)
+    if end is not None:
+        statement = statement.where(Observation.observed_at < end)
     return list(session.execute(statement).scalars().all())
 
 
@@ -237,6 +266,25 @@ def _most_common(records: list[DetectedHazardRecord]) -> Optional[ViolationMetri
 
 
 def _area_metric(work_area: str, records: list[DetectedHazardRecord]) -> AreaMetric:
+    observations = {record.observation_id: record.observation for record in records if record.observation is not None}
+    observation_risk_distribution = {"Low": 0, "Moderate": 0, "High": 0, "Critical": 0, "pending": 0, "incomplete": 0, "no_supported_findings": 0}
+    provisional_observation_count = 0
+    for observation in observations.values():
+        summary = overall_risk_summary(observation)
+        band = summary["overall_risk_band"]
+        if band:
+            observation_risk_distribution[band] += 1
+        elif summary["overall_risk_status"] == "pending":
+            observation_risk_distribution["pending"] += 1
+        elif summary["overall_risk_status"] == "no_supported_findings":
+            observation_risk_distribution["no_supported_findings"] += 1
+        else:
+            observation_risk_distribution["incomplete"] += 1
+        provisional_observation_count += int(summary["overall_risk_provisional"])
+    results = [latest_assessment_result(record) for record in records]
+    alert_by_id = {alert.alert_id: alert for observation in observations.values() for alert in observation.alerts}
+    alert_by_id.update({alert.alert_id: alert for record in records for alert in record.alerts})
+    alert_counts = {state: sum(alert.status == state for alert in alert_by_id.values()) for state in ("open", "acknowledged", "resolved", "dismissed")}
     return AreaMetric(
         work_area=work_area,
         violation_count=len(records),
@@ -245,6 +293,17 @@ def _area_metric(work_area: str, records: list[DetectedHazardRecord]) -> AreaMet
         detected_hazard_ids=tuple(
             sorted(record.detected_hazard_id for record in records)
         ),
+        violation_metrics=tuple(_metric(records, hazard_type) for hazard_type in sorted({record.hazard_type for record in records})),
+        observation_count=len(observations),
+        valid_latest_completed_assessment_count=sum(result["status"] == "completed" for result in results),
+        pending_latest_assessment_count=sum(result["status"] == "pending" for result in results),
+        incomplete_latest_assessment_count=sum(result["status"] in {"missing", "incomplete"} for result in results),
+        overall_observation_risk_distribution=observation_risk_distribution,
+        provisional_observation_count=provisional_observation_count,
+        individual_alert_count=len(alert_by_id),
+        alert_status_counts=alert_counts,
+        unresolved_individual_alert_count=alert_counts["open"] + alert_counts["acknowledged"],
+        safety_case_count=len({observation.observation_id for observation in observations.values() if observation.alerts} | {record.observation_id for record in records if record.alerts}),
     )
 
 
@@ -288,6 +347,25 @@ def summarize_violation_records(
         risk_distribution[risk_level if risk_level in risk_distribution else "pending"] += 1
         alert_statuses.extend(alert.status for alert in record.alerts)
 
+    observation_records: dict[str, Observation] = {}
+    for record in relevant_records:
+        if record.observation is not None:
+            observation_records.setdefault(record.observation_id, record.observation)
+    observation_summaries = [overall_risk_summary(observation) for observation in observation_records.values()]
+    overall_distribution = {"Low": 0, "Moderate": 0, "High": 0, "Critical": 0, "pending": 0, "incomplete": 0, "no_supported_findings": 0}
+    for summary in observation_summaries:
+        if summary["overall_risk_band"]:
+            overall_distribution[summary["overall_risk_band"]] += 1
+        elif summary["overall_risk_status"] == "pending":
+            overall_distribution["pending"] += 1
+        elif summary["overall_risk_status"] == "no_supported_findings":
+            overall_distribution["no_supported_findings"] += 1
+        else:
+            overall_distribution["incomplete"] += 1
+    finding_results = [latest_assessment_result(record) for record in relevant_records]
+    alert_by_id = {alert.alert_id: alert for observation in observation_records.values() for alert in observation.alerts}
+    alert_by_id.update({alert.alert_id: alert for record in relevant_records for alert in record.alerts})
+    all_alert_status_counts = {state: sum(alert.status == state for alert in alert_by_id.values()) for state in ("open", "acknowledged", "resolved", "dismissed")}
     return SafetyAnalytics(
         total_violations=len(relevant_records),
         violations_by_work_area=area_metrics,
@@ -301,10 +379,82 @@ def summarize_violation_records(
             status in UNRESOLVED_ALERT_STATUSES for status in alert_statuses
         ),
         resolved_alert_count=alert_statuses.count("resolved"),
+        unique_observation_count=len(observation_records),
+        valid_latest_completed_assessment_count=sum(result["status"] == "completed" for result in finding_results),
+        pending_latest_assessment_count=sum(result["status"] == "pending" for result in finding_results),
+        incomplete_latest_assessment_count=sum(result["status"] in {"missing", "incomplete"} for result in finding_results),
+        overall_observation_risk_distribution=overall_distribution,
+        provisional_observation_count=sum(summary["overall_risk_provisional"] for summary in observation_summaries),
+        individual_alert_count=len(alert_by_id),
+        alert_status_counts=all_alert_status_counts,
+        all_unresolved_alert_count=all_alert_status_counts["open"] + all_alert_status_counts["acknowledged"],
+        safety_case_count=len({observation.observation_id for observation in observation_records.values() if observation.alerts} | {record.observation_id for record in relevant_records if record.alerts}),
     )
 
 
-def get_safety_analytics(session: Session) -> SafetyAnalytics:
+def get_safety_analytics(
+    session: Session, *, start: datetime | None = None, end: datetime | None = None,
+) -> SafetyAnalytics:
     """Query PostgreSQL-backed records and compute the zone analytics snapshot."""
 
-    return summarize_violation_records(load_violation_records(session))
+    start, end = validate_recurrence_window(start, end)
+    return summarize_violation_records(load_violation_records(session, start=start, end=end))
+
+
+def get_finding_observation_page(
+    session: Session, *, work_area: str | None = None, hazard_type: str | None = None,
+    start: datetime | None = None, end: datetime | None = None,
+    area_mode: str = "zone", sort: str = "newest", limit: int = 20, offset: int = 0,
+) -> dict:
+    """Page distinct observations with matching supported finding rows.
+
+    Matching, counts and pagination are performed in SQL; the selected page is
+    then hydrated with bounded select-in queries for evidence lineage.
+    """
+    start, end = validate_recurrence_window(start, end)
+    source_pairs = [(label, category) for label, category in LABEL_TO_HAZARD.items()
+                    if hazard_type is None or category == hazard_type]
+    pairs_match = or_(*(and_(DetectedHazardRecord.source_label == label,
+                             DetectedHazardRecord.hazard_type == category)
+                        for label, category in source_pairs)) if source_pairs else False
+    conditions = [DetectedHazardRecord.observation_id == Observation.observation_id, pairs_match]
+    if start is not None:
+        conditions.append(Observation.observed_at >= start)
+    if end is not None:
+        conditions.append(Observation.observed_at < end)
+    trimmed_area = func.trim(Observation.work_area)
+    unknown_area = or_(Observation.work_area.is_(None), trimmed_area == "",
+                       func.lower(trimmed_area).in_(("unspecified", "unknown", "unassigned work area")))
+    if area_mode == "recurrence":
+        conditions.append(~unknown_area)
+    if work_area is not None:
+        conditions.append(unknown_area if area_mode == "zone" and work_area == "Unspecified"
+                          else trimmed_area == work_area)
+    matching = select(DetectedHazardRecord.observation_id).join(
+        Observation, Observation.observation_id == DetectedHazardRecord.observation_id
+    ).where(*conditions)
+    total_observations = session.scalar(select(func.count()).select_from(matching.distinct().subquery())) or 0
+    total_matching_findings = session.scalar(select(func.count()).select_from(matching.subquery())) or 0
+    ordering = (Observation.observed_at.desc(), Observation.observation_id.desc()) if sort == "newest" else (Observation.observed_at.asc(), Observation.observation_id.asc())
+    page_stmt = (select(Observation.observation_id, Observation.observed_at)
+                 .join(DetectedHazardRecord, DetectedHazardRecord.observation_id == Observation.observation_id)
+                 .where(*conditions).distinct().order_by(*ordering).offset(offset).limit(limit))
+    page_ids = [row.observation_id for row in session.execute(page_stmt).all()]
+    if not page_ids:
+        observations = []
+        matching_ids = {}
+    else:
+        detail_stmt = (select(Observation).where(Observation.observation_id.in_(page_ids))
+                       .options(selectinload(Observation.detected_hazards).selectinload(DetectedHazardRecord.assessments),
+                                selectinload(Observation.alerts)))
+        by_id = {item.observation_id: item for item in session.execute(detail_stmt).scalars().all()}
+        observations = [by_id[item_id] for item_id in page_ids if item_id in by_id]
+        matching_stmt = (select(DetectedHazardRecord.observation_id, DetectedHazardRecord.detected_hazard_id)
+                         .join(Observation, Observation.observation_id == DetectedHazardRecord.observation_id)
+                         .where(*conditions, DetectedHazardRecord.observation_id.in_(page_ids)))
+        matching_ids = defaultdict(list)
+        for observation_id, hazard_id in session.execute(matching_stmt).all():
+            matching_ids[observation_id].append(hazard_id)
+    return {"items": [(item, sorted(matching_ids.get(item.observation_id, []))) for item in observations],
+            "total_observations": total_observations, "total_matching_findings": total_matching_findings,
+            "limit": limit, "offset": offset}

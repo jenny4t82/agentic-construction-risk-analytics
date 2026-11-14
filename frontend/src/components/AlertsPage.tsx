@@ -42,6 +42,29 @@ export function AlertsPage({ onNavigate }: Props) {
   const closeSelectedCase = useCallback(() => setSelectedCase(null), []);
 
   useEffect(() => { void fetchReportWorkAreas().then(setWorkAreas).catch(() => setWorkAreas([])); }, []);
+  useEffect(() => {
+    let active = true;
+    let requestedId: string | null = null;
+    const openTarget = () => {
+      const [route, query = ''] = window.location.hash.slice(1).split('?');
+      const observationId = route === 'alerts' ? new URLSearchParams(query).get('observation_id') : null;
+      if (!observationId) {
+        requestedId = null;
+        setSelectedCase(null);
+        setActionError(null);
+        return;
+      }
+      if (observationId === requestedId) return;
+      requestedId = observationId;
+      setDetailLoading(true); setActionError(null);
+      void fetchSafetyCase(observationId).then(item => { if (active) setSelectedCase(item); })
+        .catch(reason => { if (active) { setSelectedCase(null); setActionError(reason instanceof Error ? reason.message : 'Unable to load the linked safety case'); } })
+        .finally(() => { if (active) setDetailLoading(false); });
+    };
+    openTarget();
+    window.addEventListener('hashchange', openTarget);
+    return () => { active = false; window.removeEventListener('hashchange', openTarget); };
+  }, []);
   const resetPage = () => { beginLoading(); setOffset(0); };
 
   const openCase = async (item: SafetyCaseResponse) => {

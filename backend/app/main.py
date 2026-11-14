@@ -58,6 +58,7 @@ from .safety_agent import assess_safety, decide_alert, detect_objects, load_mode
 from .safety_graph import run_safety_graph
 from .assessment_context import assessment_state, correct_assessment, find_assessment
 from .assessment_queries import overall_risk_summary, query_observations, summarize
+from .safety_cases import case_status, get_safety_case_alerts, group_safety_cases, list_safety_case_records
 
 
 class ObservationRequest(BaseModel):
@@ -292,6 +293,42 @@ class AlertStatusUpdateRequest(BaseModel):
 class AlertCreateResponse(BaseModel):
     created: bool
     alert: AlertDetailResponse
+
+
+SafetyCaseStatus = Literal["open", "acknowledged", "resolved", "dismissed", "mixed_closed"]
+
+
+class SafetyCaseEvidence(BaseModel):
+    original_available: bool
+    annotated_available: bool
+
+
+class SafetyCaseResponse(BaseModel):
+    case_id: str
+    observation_id: str
+    observed_at: datetime
+    work_area: Optional[str] = None
+    evidence: SafetyCaseEvidence
+    overall_risk_score: Optional[int] = None
+    overall_risk_band: Optional[str] = None
+    overall_risk_status: str
+    overall_risk_provisional: bool
+    case_status: SafetyCaseStatus
+    alert_count: int
+    alert_status_counts: dict[str, int]
+    unresolved_alert_count: int
+    review_required: bool
+    alerts: list[AlertDetailResponse]
+    findings: list[PersistedHazardResponse]
+    assessment_corrections: list[dict[str, Any]]
+
+
+class SafetyCaseListResponse(BaseModel):
+    total_cases: int
+    total_alerts: int
+    limit: int
+    offset: int
+    items: list[SafetyCaseResponse]
 
 
 class AssessmentCompletionRequest(BaseModel):
@@ -549,6 +586,45 @@ def _alert_response(alert: Alert) -> AlertDetailResponse:
             if assessment is not None
             else None
         ),
+    )
+
+
+def _safety_case_response(observation: Observation, alerts: list[Alert]) -> SafetyCaseResponse:
+    """Build a virtual case without changing any alert or observation row."""
+    detail = ObservationDetailResponse.model_validate(observation, from_attributes=True)
+    image_metadata = (observation.raw_metadata or {}).get("image")
+    evidence = {}
+    for variant in ("original", "annotated"):
+        try:
+            get_observation_image_path(observation.observation_id, variant, image_metadata)
+            available = True
+        except (FileNotFoundError, ValueError):
+            available = False
+        evidence[f"{variant}_available"] = available
+
+    child_responses = [_alert_response(alert) for alert in alerts]
+    corrections = (observation.raw_metadata or {}).get("assessment_corrections", [])
+    return SafetyCaseResponse(
+        case_id=f"observation:{observation.observation_id}",
+        observation_id=observation.observation_id,
+        observed_at=observation.observed_at,
+        work_area=observation.work_area,
+        evidence=SafetyCaseEvidence(**evidence),
+        overall_risk_score=detail.overall_risk_score,
+        overall_risk_band=detail.overall_risk_band,
+        overall_risk_status=detail.overall_risk_status,
+        overall_risk_provisional=detail.overall_risk_provisional,
+        case_status=case_status(alerts),
+        alert_count=len(alerts),
+        alert_status_counts={
+            state: sum(alert.status == state for alert in alerts)
+            for state in ("open", "acknowledged", "resolved", "dismissed")
+        },
+        unresolved_alert_count=sum(alert.status in {"open", "acknowledged"} for alert in alerts),
+        review_required=any(alert.review_required for alert in child_responses),
+        alerts=child_responses,
+        findings=detail.detected_hazards,
+        assessment_corrections=corrections if isinstance(corrections, list) else [],
     )
 
 
@@ -815,6 +891,59 @@ def download_report(
         content=render_safety_report_pdf(report), media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/safety-cases", response_model=SafetyCaseListResponse, dependencies=[Depends(get_current_user)])
+def get_safety_cases(
+    work_area: Optional[str] = None,
+    status: Optional[SafetyCaseStatus] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    search: Optional[str] = Query(default=None, min_length=1, max_length=255),
+    sort: Literal["newest", "oldest"] = "newest",
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Optional[Session] = Depends(get_db),
+) -> SafetyCaseListResponse:
+    """List observation-derived alert cases; counts distinguish cases/alerts."""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    for value in (start, end):
+        if value is not None and value.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="Date filters require a timezone")
+    if start is not None and end is not None and start >= end:
+        raise HTTPException(status_code=422, detail="start must precede end")
+    if search is not None and not search.strip():
+        raise HTTPException(status_code=422, detail="search must contain an observation or case ID")
+    try:
+        alerts = list_safety_case_records(db)
+        cases = group_safety_cases(alerts, work_area=work_area, status=status,
+            start=start, end=end, search=search, sort=sort)
+        page = cases[offset:offset + limit]
+        return SafetyCaseListResponse(
+            total_cases=len(cases),
+            total_alerts=sum(len(case.alerts) for case in cases),
+            limit=limit,
+            offset=offset,
+            items=[_safety_case_response(case.observation, list(case.alerts)) for case in page],
+        )
+    except SQLAlchemyError as error:
+        raise HTTPException(status_code=500, detail="Failed to query safety cases") from error
+
+
+@app.get("/safety-cases/{observation_id}", response_model=SafetyCaseResponse,
+         dependencies=[Depends(get_current_user)])
+def get_safety_case(observation_id: str, db: Optional[Session] = Depends(get_db)) -> SafetyCaseResponse:
+    """Return a complete observation case, including every child alert."""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database is not configured")
+    try:
+        alerts = get_safety_case_alerts(db, observation_id)
+        if not alerts:
+            raise HTTPException(status_code=404, detail="Safety case not found")
+        return _safety_case_response(alerts[0].observation, alerts)
+    except SQLAlchemyError as error:
+        raise HTTPException(status_code=500, detail="Failed to query safety case") from error
 
 
 @app.get("/alerts", response_model=list[AlertDetailResponse], dependencies=[Depends(get_current_user)])

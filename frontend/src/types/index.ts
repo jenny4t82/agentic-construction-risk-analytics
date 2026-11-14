@@ -284,6 +284,47 @@ export interface AlertDetailResponse {
   assessment?: AlertAssessmentSummary | null;
 }
 
+export type SafetyCaseStatus = AlertStatus | 'mixed_closed';
+
+export interface SafetyCaseResponse {
+  case_id: string;
+  observation_id: string;
+  observed_at: string;
+  work_area: string | null;
+  evidence: { original_available: boolean; annotated_available: boolean };
+  overall_risk_score: number | null;
+  overall_risk_band: RiskBand | null;
+  overall_risk_status: ObservationDetailResponse['overall_risk_status'];
+  overall_risk_provisional: boolean;
+  case_status: SafetyCaseStatus;
+  alert_count: number;
+  alert_status_counts: Record<AlertStatus, number>;
+  unresolved_alert_count: number;
+  review_required: boolean;
+  alerts: AlertDetailResponse[];
+  findings: PersistedHazardResponse[];
+  assessment_corrections: AssessmentCorrectionAudit[];
+}
+
+export interface SafetyCaseFilters {
+  work_area?: string;
+  status?: SafetyCaseStatus;
+  start?: string;
+  end?: string;
+  search?: string;
+  sort?: 'newest' | 'oldest';
+  limit?: number;
+  offset?: number;
+}
+
+export interface SafetyCaseListResponse {
+  total_cases: number;
+  total_alerts: number;
+  limit: number;
+  offset: number;
+  items: SafetyCaseResponse[];
+}
+
 export interface AnalyticsViolationMetric {
   violation_type: string;
   count: number;

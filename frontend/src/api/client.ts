@@ -11,6 +11,9 @@ import type {
   ObservationDetailResponse,
   PendingAssessmentContext,
   SafetyAnalyticsResponse,
+  SafetyCaseFilters,
+  SafetyCaseListResponse,
+  SafetyCaseResponse,
   SafetyReport,
   SafetyReportFilters,
   TokenResponse,
@@ -279,6 +282,28 @@ export async function fetchAlerts(observationId?: string): Promise<AlertDetailRe
   const res = await apiFetch(url);
   if (!res.ok) throw new ApiError(res.status, await parseError(res, 'Failed to load alerts'));
   return await res.json() as AlertDetailResponse[];
+}
+
+export async function fetchSafetyCases(filters: SafetyCaseFilters = {}): Promise<SafetyCaseListResponse> {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => { if (value !== undefined) query.set(key, String(value)); });
+  const res = await apiFetch(`/safety-cases${query.size ? `?${query}` : ''}`);
+  return await parseSafetyCaseResponse<SafetyCaseListResponse>(res, 'Failed to load safety cases');
+}
+
+export async function fetchSafetyCase(observationId: string): Promise<SafetyCaseResponse> {
+  const res = await apiFetch(`/safety-cases/${encodeURIComponent(observationId)}`);
+  return await parseSafetyCaseResponse<SafetyCaseResponse>(res, 'Failed to load safety case');
+}
+
+async function parseSafetyCaseResponse<T>(res: Response, fallback: string): Promise<T> {
+  const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new ApiError(res.status, `Safety Cases API returned a non-JSON response (HTTP ${res.status}). Check the /safety-cases Vite proxy and backend route.`);
+  }
+  if (!res.ok) throw new ApiError(res.status, await parseError(res, fallback));
+  try { return await res.json() as T; }
+  catch { throw new ApiError(res.status, 'Safety Cases API returned invalid JSON. Check the backend response and try again.'); }
 }
 
 export async function updateAlertStatus(

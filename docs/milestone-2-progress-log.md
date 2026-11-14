@@ -460,3 +460,124 @@ validation, frontend build, lint, and whitespace results remain applicable;
 this browser-only sign-off changed documentation only. Phase 8.1D is ready for
 Git sign-off, with live all-Pending presentation as the noted data-availability
 limitation. No Phase 8.2 work or commit was performed.
+
+### Phase 8.2A observation-level safety cases — 2026-11-13
+
+Audited the existing alert model and documented the grouping/data contract
+before implementing API changes. Safety cases are a read-time group of all
+persisted alerts sharing `observation_id`; the stable key is
+`observation:<observation_id>`. No safety-case table or migration is added.
+Cases only exist for observations with at least one alert. Existing alert rows,
+assessment versions, snapshots, evidence, statuses, timestamps, and corrections
+remain the source of truth.
+
+Added authenticated `GET /safety-cases` and `GET /safety-cases/{observation_id}`.
+The list filters on exact work area, derived case status, half-open timezone-aware
+observation dates, observation/case ID search, stable newest/oldest sorting, and
+case-level pagination. `total_cases` counts unique observations and
+`total_alerts` counts their individual child alerts before pagination. Case
+detail includes Phase 8.1D's existing overall summary, original/annotated
+availability flags, individual alert details, full detected finding assessment
+history, and existing correction audit metadata. Alert correction review markers
+remain attached to the original alert.
+
+Case state is conservative: any Open child means Open; absent Open, any
+Acknowledged means Acknowledged; all Resolved means Resolved; all Dismissed
+means Dismissed; mixed Resolved/Dismissed becomes `mixed_closed`. Unresolved
+count includes only Open and Acknowledged. No case-level lifecycle action was
+added; the existing Safety Officer/Admin per-alert API remains unchanged.
+Typed `SafetyCaseResponse`, list/filter contracts, and API client fetch helpers
+are ready for Phase 8.2B; no Alert Register UI redesign was made.
+
+Full isolated backend discovery: 219 tests passed, nine PostgreSQL integration
+tests skipped with `TEST_DATABASE_URL` unset. Frontend TypeScript/Vite build
+passed; lint passed with seven existing warnings; `git diff --check` passed.
+Case tests cover unique grouping, mixed lifecycle states, filtering/search,
+pagination/counts, correction review lineage, authenticated reads, and
+no-write behavior. No local/demo database or image evidence was used or changed.
+No schema migration, scoring/decision change, alert mutation, staging, or commit
+was performed. The first list implementation eagerly loads related graphs to
+avoid N+1 queries but groups candidates in application memory; SQL aggregation
+is a scale optimization if alert volume grows substantially.
+
+### Phase 8.2C safety case integration audit — 2026-11-13
+
+The Alert Register was still rendering the pre-case one-row-per-alert interface;
+the case endpoints had no consumer, and the safety-case cards, filters, detail
+drawer, row, summary, and hook reported by the design handoff were absent. Added
+the safety-case workspace to the existing `#alerts` route, wired list/detail
+queries, backend filters and counts, evidence, assessment/correction details,
+individual child lifecycle actions, and `#incidents` deep links. Added a missing
+Vite `/safety-cases` proxy and non-JSON/invalid-JSON API errors. No case bulk
+action is present.
+
+The authenticated browser connected to the existing backend and read-only
+before/after snapshots matched exactly: 27 observations and 13 alerts (IDs 3–15;
+5 Open, 1 Acknowledged, 5 Resolved, 2 Dismissed). The checked-out API source
+contains case routes, but the live server's OpenAPI omits them and its case GET
+returns 404. The server was not restarted; populated case/drawer verification is
+therefore blocked on loading the current workspace backend. Empty/error-page
+layout showed no horizontal overflow at 390, 768, and 1280 pixels. A later
+read-only snapshot retry returned 401 after the integrated browser session
+expired; the session was not reauthenticated.
+
+Full isolated backend suite: 219 passed, 9 PostgreSQL integration tests skipped.
+Frontend build passed; lint passed with six existing warnings; no frontend test
+script is configured; `git diff --check` passed. No database records, alert
+statuses, images, models, or baseline refs were changed. Phase 8.2A/B/C requires
+connected populated-case verification before Git checkpoint sign-off; no staging
+or commit was performed.
+
+### Phase 8.2C runtime resolution and final verification — 2026-11-13
+
+Resolved the Alert Register runtime mismatch. Port 8000 was held by a stale
+SafeSite backend process from this workspace whose loaded OpenAPI omitted the
+two safety-case routes. After confirming its process command, executable and
+owner, stopped only that SafeSite process and started the current workspace
+backend with `scripts/start_local_backend.ps1`. The script targets
+`safesite_local` through its local-only URL helper and does not bootstrap
+accounts or run migrations. Health returned 200, OpenAPI listed both case
+routes, unauthenticated case reads returned 401, and authenticated list/detail
+reads returned JSON.
+
+Authenticated read-only before/after snapshots matched exactly: 27 observation
+IDs, 13 alert IDs and timestamps/statuses, and complete case assessment-history
+summaries. The API returned 10 unique cases and 13 individual alerts. The
+Alert Register grouped multi-alert observations, preserved all child alert
+history, and separated overall risk from derived case status. Search,
+work-area, status, date, sorting, case-level pagination, thumbnails, original
+and annotated evidence, assessment history and Safety Incidents deep links
+were verified. The case drawer and image modal passed Escape/focus restoration
+and focus containment checks; 390/768/1280px layouts had no horizontal
+overflow. No live alert lifecycle action was taken. Current data has no
+review-required alert or mixed-closed case to demonstrate live, though isolated
+tests cover these states.
+
+Focused isolated backend regression subset passed 43 tests; the full previously
+validated backend suite remains 219 passed / 9 PostgreSQL integration tests
+skipped. Frontend build passed, lint passed with six existing warnings, and
+`git diff --check` passed. No local records, images, weights, schema, or
+baseline refs changed. Phase 8.2A/B/C is ready for sign-off; no staging or
+commit was performed.
+
+### Phase 8.2D final quality audit — 2026-11-14
+
+Audited the authenticated Alert Register and complete safety-case
+implementation on `revamp/milestone-2`. Current connected data shows 10 unique
+cases and 13 individual alerts, with overall observation risk separate from
+case lifecycle status and unresolved counts. Mixed child states retain the
+conservative summary (Acknowledged plus Dismissed remains Acknowledged with
+one unresolved alert; resolved plus dismissed is `mixed_closed`). Individual
+status controls target persisted alert IDs, list/detail refresh after success,
+and no bulk case action is present. No connected lifecycle mutation was made.
+
+No additional confirmed defect required a code change. Full isolated backend
+suite: 219 passed, 9 PostgreSQL integration tests skipped because no test DB
+URL is configured. Frontend TypeScript/Vite build passed; lint passed with six
+existing warnings outside the new Safety Case components; no frontend test
+script is configured; `git diff --check` passed. Existing live observations,
+assessments, alerts and evidence were not written during verification. Review
+required and `mixed_closed` live examples remain unavailable, with isolated
+tests covering those conditions. Phase 8.2A/B/C is ready for checkpoint
+approval; Phase 8.2 can close after that checkpoint. Nothing was staged or
+committed.

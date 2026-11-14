@@ -161,7 +161,7 @@ function AuthenticatedApp() {
   if (isLoading) return <div className="min-h-screen bg-[#f4f7f7] flex items-center justify-center text-sm text-slate-500">Restoring your SafeSite session…</div>;
   if (!user) return route === 'signup' ? <SignupPage onNavigate={(next) => navigate(next)} /> : <LoginPage onNavigate={(next) => navigate(next)} />;
   const section = route === 'login' || route === 'signup' ? 'overview' : route;
-  return <AppShell activeSection={section} onNavigate={navigate} user={user} onLogout={() => { logout(); navigate('login'); }}>{section === 'overview' && <OverviewPage onNavigate={navigate} />}{(section === 'incidents' || section === 'analysis') && <SafetyWorkspace key={section} view={section} onNavigate={navigate} />}{section === 'alerts' && <AlertsPage />}{section === 'zones' && <ZoneAnalyticsPage />}{section === 'recurrence' && <RecurrenceAnalyticsPage onNavigate={navigate} />}{section === 'reports' && <ReportsPage />}</AppShell>;
+  return <AppShell activeSection={section} onNavigate={navigate} user={user} onLogout={() => { logout(); navigate('login'); }}>{section === 'overview' && <OverviewPage onNavigate={navigate} />}{(section === 'incidents' || section === 'analysis') && <SafetyWorkspace key={section} view={section} onNavigate={navigate} />}{section === 'alerts' && <AlertsPage onNavigate={navigate} />}{section === 'zones' && <ZoneAnalyticsPage />}{section === 'recurrence' && <RecurrenceAnalyticsPage onNavigate={navigate} />}{section === 'reports' && <ReportsPage />}</AppShell>;
 }
 
 export function App() { return <AuthProvider><AuthenticatedApp /></AuthProvider>; }

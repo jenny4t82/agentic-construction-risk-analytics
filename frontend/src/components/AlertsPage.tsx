@@ -1,56 +1,90 @@
-import { useEffect, useState } from 'react';
-import { AlertTriangle, Check, CircleX, RefreshCw, ShieldCheck } from 'lucide-react';
-import { ApiError, fetchAlerts, updateAlertStatus } from '../api/client';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { ApiError, fetchReportWorkAreas, fetchSafetyCase, updateAlertStatus } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
-import type { AlertDetailResponse, AlertStatus } from '../types';
-import { formatHazardType } from '../utils/formatters';
+import type { AlertDetailResponse, SafetyCaseFilters, SafetyCaseResponse, SafetyCaseStatus } from '../types';
+import { SafetyCaseCardList } from './SafetyCaseCardList';
+import { SafetyCaseDetailDrawer } from './SafetyCaseDetailDrawer';
+import { SafetyCaseFilterBar } from './SafetyCaseFilterBar';
+import { SafetyCaseSummary } from './SafetyCaseSummary';
+import { useSafetyCases } from '../hooks/useSafetyCases';
 
-const formatHazard = formatHazardType;
-const cleanAlertMessage = (value: string) => value.replace(/\s*\(source label:[^)]+\)/i, '');
-const formatTime = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
-const canManage = (role: string) => role === 'safety_officer' || role === 'admin';
+interface Props { onNavigate: (section: 'overview' | 'incidents' | 'alerts' | 'zones' | 'recurrence' | 'analysis' | 'reports') => void }
+const canManage = (role: string | undefined) => role === 'safety_officer' || role === 'admin';
+const dateStart = (value: string) => value ? `${value}T00:00:00.000Z` : undefined;
+const dateEnd = (value: string) => {
+  if (!value) return undefined;
+  const nextDay = new Date(`${value}T00:00:00.000Z`);
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  return nextDay.toISOString();
+};
 
-export function AlertsPage() {
+export function AlertsPage({ onNavigate }: Props) {
   const { user } = useAuth();
-  const [alerts, setAlerts] = useState<AlertDetailResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [updating, setUpdating] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
+  const [workArea, setWorkArea] = useState('');
+  const [status, setStatus] = useState<SafetyCaseStatus | ''>('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [sort, setSort] = useState<'newest' | 'oldest'>('newest');
+  const [limit, setLimit] = useState(20);
+  const [offset, setOffset] = useState(0);
+  const [workAreas, setWorkAreas] = useState<string[]>([]);
+  const [selectedCase, setSelectedCase] = useState<SafetyCaseResponse | null>(null);
+  const [busyAlertId, setBusyAlertId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const filters = useMemo<SafetyCaseFilters>(() => ({
+    search: search.trim() || undefined, work_area: workArea || undefined, status: status || undefined,
+    start: dateStart(startDate), end: dateEnd(endDate), sort, limit, offset,
+  }), [search, workArea, status, startDate, endDate, sort, limit, offset]);
+  const { data, loading, error, refresh, beginLoading } = useSafetyCases(filters);
+  const closeSelectedCase = useCallback(() => setSelectedCase(null), []);
 
-  const load = async () => {
-    setLoading(true); setError(null);
-    try { setAlerts(await fetchAlerts()); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to load alerts'); }
-    finally { setLoading(false); }
+  useEffect(() => { void fetchReportWorkAreas().then(setWorkAreas).catch(() => setWorkAreas([])); }, []);
+  const resetPage = () => { beginLoading(); setOffset(0); };
+
+  const openCase = async (item: SafetyCaseResponse) => {
+    setSelectedCase(item);
+    setDetailLoading(true);
+    setActionError(null);
+    try { setSelectedCase(await fetchSafetyCase(item.observation_id)); }
+    catch (reason) { setSelectedCase(null); setActionError(reason instanceof Error ? reason.message : 'Unable to load case details'); }
+    finally { setDetailLoading(false); }
   };
-  useEffect(() => { void load(); }, []);
 
-  const changeStatus = async (alert: AlertDetailResponse, status: Extract<AlertStatus, 'acknowledged' | 'resolved' | 'dismissed'>) => {
-    setUpdating(alert.alert_id); setError(null);
+  const changeAlertStatus = useCallback(async (alert: AlertDetailResponse, nextStatus: 'acknowledged' | 'resolved' | 'dismissed') => {
+    setBusyAlertId(alert.alert_id);
+    setActionError(null);
     try {
-      const updated = await updateAlertStatus(alert.alert_id, status);
-      setAlerts((current) => current.map((item) => item.alert_id === updated.alert_id ? updated : item));
+      // Every action targets one persisted child alert. Refresh both list totals and
+      // detail from the backend so the derived case state cannot become stale.
+      await updateAlertStatus(alert.alert_id, nextStatus);
+      await refresh();
+      if (selectedCase) setSelectedCase(await fetchSafetyCase(selectedCase.observation_id));
     } catch (reason) {
-      setError(reason instanceof ApiError && reason.status === 403 ? 'Your role cannot manage alert lifecycle changes.' : reason instanceof Error ? reason.message : 'Alert update failed');
-    } finally { setUpdating(null); }
-  };
+      setActionError(reason instanceof ApiError && reason.status === 403
+        ? 'Your role cannot manage alert lifecycle changes.'
+        : reason instanceof Error ? reason.message : 'Alert update failed');
+    } finally { setBusyAlertId(null); }
+  }, [refresh, selectedCase]);
 
-  return <div className="space-y-7"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-teal-700 font-bold">Operational review</p><h2 className="text-3xl font-bold mt-1">Safety alerts</h2><p className="text-slate-500 mt-2">Persisted violation alerts with their review lifecycle.</p></div><button onClick={() => void load()} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-700 hover:border-teal-400"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Refresh</button></div>
-    {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
-    <section className="panel overflow-hidden"><div className="panel-heading"><div><h3>Alert register</h3><p>Each alert remains linked to its source observation and detected violation.</p></div><ShieldCheck className="text-teal-600" size={20} /></div>
-      {loading ? <div className="p-8 text-sm text-slate-400">Loading alerts…</div> : alerts.length === 0 ? <div className="p-8 text-sm text-slate-400">No persisted alerts available yet.</div> : <div className="divide-y divide-slate-100">{alerts.map((alert) => <div key={alert.alert_id} className="p-5 sm:p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-5"><div className="flex gap-4 min-w-0"><div className="w-10 h-10 shrink-0 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center"><AlertTriangle size={18} /></div><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h4 className="font-bold capitalize">{formatHazard(alert.alert_type)}</h4><span className={`status-badge ${alert.status === 'resolved' ? 'status-green' : alert.status === 'open' ? 'status-red' : 'status-amber'}`}>{alert.status}</span></div><p className="text-sm text-slate-500 mt-1">{cleanAlertMessage(alert.message)}</p><p className="text-xs text-slate-400 mt-2">{alert.observation.work_area || 'Unspecified area'} · {formatTime(alert.created_at)} · Observation {alert.observation_id}</p><LifecycleTimes alert={alert} /></div></div>{canManage(user?.role ?? 'user') && alert.status !== 'resolved' && alert.status !== 'dismissed' && <div className="flex flex-wrap gap-2 xl:justify-end"><button disabled={updating === alert.alert_id || alert.status === 'acknowledged'} onClick={() => void changeStatus(alert, 'acknowledged')} className="lifecycle-button"><Check size={14} /> Acknowledge</button><button disabled={updating === alert.alert_id} onClick={() => void changeStatus(alert, 'resolved')} className="lifecycle-button lifecycle-success"><ShieldCheck size={14} /> Resolve</button><button disabled={updating === alert.alert_id} onClick={() => void changeStatus(alert, 'dismissed')} className="lifecycle-button lifecycle-danger"><CircleX size={14} /> Dismiss</button></div>}</div>)}</div>}
+  const totalPages = Math.max(1, Math.ceil((data?.total_cases ?? 0) / limit));
+  const currentPage = Math.floor(offset / limit) + 1;
+
+  return <div className="space-y-6">
+    <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm font-bold text-teal-700">Operational review</p><h2 className="mt-1 text-3xl font-bold text-slate-900">Safety Case Register</h2><p className="mt-2 max-w-3xl text-sm text-slate-600">Related alerts are grouped by observation for investigation. Existing alert records and their individual lifecycle remain unchanged.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => onNavigate('incidents')} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:border-teal-400">Observation History</button><button type="button" onClick={() => void refresh()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:border-teal-400 disabled:opacity-50"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Refresh</button></div></header>
+    <SafetyCaseSummary data={data} />
+    <SafetyCaseFilterBar search={search} onSearch={(value) => { resetPage(); setSearch(value); }} workArea={workArea} onWorkArea={(value) => { resetPage(); setWorkArea(value); }} workAreas={workAreas} status={status} onStatus={(value) => { resetPage(); setStatus(value); }} startDate={startDate} onStartDate={(value) => { resetPage(); setStartDate(value); }} endDate={endDate} onEndDate={(value) => { resetPage(); setEndDate(value); }} sort={sort} onSort={(value) => { resetPage(); setSort(value); }} />
+    {(error || actionError) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{actionError || error}</div>}
+    <section aria-label="Safety case results" aria-busy={loading}>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600"><p>{data ? `Showing ${data.total_cases === 0 ? 0 : offset + 1}–${Math.min(offset + (data.items.length), data.total_cases)} of ${data.total_cases} cases · ${data.total_alerts} individual alerts` : error ? 'Safety case results unavailable' : 'Loading safety case totals'}</p><label className="flex items-center gap-2">Cases per page<select aria-label="Cases per page" value={limit} onChange={(event) => { resetPage(); setLimit(Number(event.target.value)); }} className="rounded-md border border-slate-300 bg-white px-2 py-1"><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option></select></label></div>
+      {loading && !data ? <p className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading safety cases…</p>
+        : data?.items.length ? <SafetyCaseCardList items={data.items} onOpen={(item) => void openCase(item)} />
+        : !error && <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center"><AlertTriangle className="mx-auto text-slate-400" /><p className="mt-2 font-semibold text-slate-700">No matching safety cases</p><p className="mt-1 text-sm text-slate-500">Try changing the filters or search term.</p></div>}
+      <div className="mt-4 flex items-center justify-end gap-3 text-sm"><span>Page {currentPage} of {totalPages}</span><button type="button" disabled={offset === 0 || loading} onClick={() => { beginLoading(); setOffset(Math.max(0, offset - limit)); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 disabled:opacity-40">Previous</button><button type="button" disabled={loading || offset + limit >= (data?.total_cases ?? 0)} onClick={() => { beginLoading(); setOffset(offset + limit); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 disabled:opacity-40">Next</button></div>
     </section>
-  </div>;
-}
-
-function LifecycleTimes({ alert }: { alert: AlertDetailResponse }) {
-  const events = [
-    ['Acknowledged', alert.acknowledged_at],
-    ['Resolved', alert.resolved_at],
-    ['Dismissed', alert.dismissed_at],
-  ].filter((entry): entry is [string, string] => Boolean(entry[1]));
-  return <div>
-    {alert.review_required && <p role="status" className="mt-2 text-sm text-amber-800">Review required: assessment context was corrected. Historical alert: {alert.risk_band}; current assessment: {alert.current_assessment?.risk_band ?? 'Pending'}. Alert lifecycle is unchanged.</p>}
-    <p className="mt-2 text-xs text-slate-500">{events.map(([label, timestamp]) => <span key={label} className="mr-3 inline-block">{label}: {formatTime(timestamp)}</span>)}</p>
+    {selectedCase && <SafetyCaseDetailDrawer item={selectedCase} canManage={canManage(user?.role)} busyAlertId={busyAlertId} onClose={closeSelectedCase} onAlertStatus={(alert, next) => void changeAlertStatus(alert, next)} />}
+    {detailLoading && <p role="status" className="sr-only">Loading complete case details</p>}
   </div>;
 }
